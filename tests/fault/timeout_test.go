@@ -1,10 +1,7 @@
-// Package fault 承载 ssl 插件的四类故障注入测试（G-20 / S-04）。
-// 本文件测超时故障：ACME 签发不返回时，请求级 timeout 必须终止并回上游错误。
 package fault
 
 import (
-	"context"
-	"strings"
+	"net"
 	"testing"
 	"time"
 
@@ -12,37 +9,42 @@ import (
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
-// TestFaultTimeout 注入 timeout 故障，断言 ssl.issue 返回上游超时错误。
+// TestFaultTimeout 注入超时故障：selfsign 在预算内未完成时返回 E_UPSTREAM，
+// 且不留下半成品。
 func TestFaultTimeout(t *testing.T) {
-	issuer := &certs.StubIssuer{Fault: certs.Fault{Kind: certs.FaultTimeout, Message: "ACME 30s 无响应"}}
-	svc := certs.NewService(issuer)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
-	cert, perr := svc.Issue(ctx, "slow.example.com", "")
-	if cert != nil {
-		t.Fatalf("超时故障下不应返回证书，得到 %+v", cert)
+	svc, dir := newService(t, certs.FaultTimeout)
+	info, perr := svc.SelfSign(certs.SelfSignRequest{Domain: "slow.example.com"})
+	if info != nil {
+		t.Fatalf("超时故障下不应返回证书，得到 %+v", info)
 	}
-	if perr == nil {
-		t.Fatal("超时故障下应返回错误")
-	}
-	if perr.Code != pluginapi.E_UPSTREAM {
-		t.Fatalf("错误码=%q，期望 %q", perr.Code, pluginapi.E_UPSTREAM)
-	}
-	if !strings.Contains(perr.Message, "超时") {
-		t.Fatalf("错误信息应含超时，得到 %q", perr.Message)
-	}
+	assertError(t, perr, pluginapi.E_UPSTREAM, "超时")
+	assertNoCertFiles(t, dir)
 }
 
-// TestTimeoutContextCancellation 校验真实 context 超时会让签发通道返回上游错误。
-func TestTimeoutContextCancellation(t *testing.T) {
-	issuer := &certs.StubIssuer{} // 无故障
-	svc := certs.NewService(issuer)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
-	defer cancel()
-	<-ctx.Done() // 等待超时真实发生
-	_, perr := svc.Issue(ctx, "cancelled.example.com", "")
-	if perr == nil || perr.Code != pluginapi.E_UPSTREAM {
-		t.Fatalf("已取消的 context 应返回 E_UPSTREAM，得到 %v", perr)
+// TestRealHandshakeTimeout 用"只监听不说 TLS"的真实 TCP 端点验证握手超时：
+// 连接能建立但握手永远等不到 ServerHello，Verify 必须在预算内放弃并返回
+// reachable=false，而不是挂死或报成协议错误。
+func TestRealHandshakeTimeout(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("监听本地端口失败: %v", err)
+	}
+	defer func() { _ = listener.Close() }()
+
+	svc := certs.NewService(certs.Options{Dir: t.TempDir(), VerifyTimeout: 200 * time.Millisecond})
+	start := time.Now()
+	result, perr := svc.Verify(certs.VerifyRequest{Domain: listener.Addr().String()})
+	elapsed := time.Since(start)
+	if perr != nil {
+		t.Fatalf("握手超时不应是协议错误，得到 %v", perr)
+	}
+	if result.Reachable {
+		t.Fatalf("握手未完成不应 reachable=true: %+v", result)
+	}
+	if result.Error == "" {
+		t.Fatal("握手超时应带 error 说明")
+	}
+	if elapsed > 3*time.Second {
+		t.Fatalf("握手超时未按预算生效，耗时 %s", elapsed)
 	}
 }

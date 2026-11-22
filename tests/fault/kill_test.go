@@ -1,38 +1,37 @@
-// Package fault 承载 ssl 插件的四类故障注入测试（G-20 / S-04）。
-// 本文件测 kill -9 类故障：签发通道所在进程崩溃时，方法必须返回 E_UPSTREAM。
 package fault
 
 import (
-	"context"
-	"strings"
 	"testing"
 
 	"github.com/pengtang1024/kore-plugin-ssl/internal/certs"
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
-// TestFaultKill 注入 kill 故障，断言 ssl.issue 返回上游错误且不落库。
+// TestFaultKill 注入 kill -9 类故障：签发通道进程失联时，selfsign 必须返回
+// E_UPSTREAM，且不能留下任何证书/私钥半成品。
 func TestFaultKill(t *testing.T) {
-	issuer := &certs.StubIssuer{Fault: certs.Fault{Kind: certs.FaultKill, Message: "worker pid 4242 SIGKILL"}}
-	svc := certs.NewService(issuer)
+	svc, dir := newService(t, certs.FaultKill)
+	info, perr := svc.SelfSign(certs.SelfSignRequest{Domain: "kill.example.com"})
+	if info != nil {
+		t.Fatalf("kill 故障下不应返回证书，得到 %+v", info)
+	}
+	assertError(t, perr, pluginapi.E_UPSTREAM, "kill")
+	assertNoCertFiles(t, dir)
+}
 
-	cert, perr := svc.Issue(context.Background(), "kill.example.com", "")
-	if cert != nil {
-		t.Fatalf("kill 故障下不应返回证书，得到 %+v", cert)
+// TestKillHealthyPath 对照组：无故障时同一方法必须真实签出证书，证明故障断言不是假通过。
+func TestKillHealthyPath(t *testing.T) {
+	_, dir := newService(t, certs.FaultNone)
+	svc := healthyService(dir)
+	info, perr := svc.SelfSign(certs.SelfSignRequest{Domain: "ok.example.com", Days: 10})
+	if perr != nil {
+		t.Fatalf("健康路径不应报错: %v", perr)
 	}
-	if perr == nil {
-		t.Fatal("kill 故障下应返回错误")
+	if !info.SelfSigned || info.Domain != "ok.example.com" || info.DaysLeft != 10 {
+		t.Fatalf("健康路径结果不符: %+v", info)
 	}
-	if perr.Code != pluginapi.E_UPSTREAM {
-		t.Fatalf("错误码=%q，期望 %q", perr.Code, pluginapi.E_UPSTREAM)
-	}
-	if !strings.Contains(perr.Message, "kill") {
-		t.Fatalf("错误信息应含 kill，得到 %q", perr.Message)
-	}
-
-	// 崩溃后清单必须保持为空：失败不应污染状态。
-	list, lerr := svc.List()
-	if lerr != nil || list.Count != 0 {
-		t.Fatalf("kill 后清单应为空，得到 count=%d err=%v", list.Count, lerr)
+	list, perr := svc.List()
+	if perr != nil || list.Count != 1 {
+		t.Fatalf("健康路径应能列出 1 张证书，得到 count=%d err=%v", list.Count, perr)
 	}
 }

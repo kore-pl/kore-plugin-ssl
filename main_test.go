@@ -1,9 +1,15 @@
 package main
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"io"
 	"log/slog"
+	"math/big"
 	"net"
 	"os"
 	"testing"
@@ -16,13 +22,18 @@ import (
 // testConfig 构造握手与会话循环共用的一致配置（不依赖环境变量）。
 func testConfig() config {
 	return config{
-		id: "ssl", version: "0.1.0", requiresKore: ">=0.1.0 <0.2.0",
+		id: "ssl", version: "0.2.0", requiresKore: ">=0.1.0 <0.2.0",
 		capabilities: []string{"system:admin"}, startedAt: time.Now(),
 	}
 }
 
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func newTestService(t *testing.T) *certs.Service {
+	t.Helper()
+	return certs.NewService(certs.Options{Dir: t.TempDir()})
 }
 
 func readFrame(t *testing.T, conn net.Conn) interface{} {
@@ -85,7 +96,7 @@ func TestHandshake(t *testing.T) {
 	if params.PluginID != "ssl" || params.ID != "ssl" {
 		t.Fatalf("plugin_id/id=%q/%q，期望都是 ssl", params.PluginID, params.ID)
 	}
-	if params.Protocol != pluginapi.Protocol || params.Version != "0.1.0" {
+	if params.Protocol != pluginapi.Protocol || params.Version != "0.2.0" {
 		t.Fatalf("protocol/version=%q/%q 不符合 §5", params.Protocol, params.Version)
 	}
 	if params.PID != os.Getpid() {
@@ -101,42 +112,114 @@ func TestHandshake(t *testing.T) {
 	}
 }
 
-// TestDispatchMethods 校验三个 ssl 方法与 ping/shutdown 的结构化结果。
+// TestDispatchMethods 校验真实方法在协议层的成功/失败分支。
 func TestDispatchMethods(t *testing.T) {
-	svc := certs.NewService(nil)
+	svc := newTestService(t)
 	cfg := testConfig()
 	cases := []struct {
+		name   string
 		method string
 		params json.RawMessage
 		wantOK bool
 	}{
-		{"kore.ping", nil, true},
-		{"ssl.list", nil, true},
-		{"ssl.issue", json.RawMessage(`{"domain":"example.com"}`), true},
-		{"ssl.renew", json.RawMessage(`{"domain":"example.com"}`), true},
-		{"ssl.issue", json.RawMessage(`{"domain":"BAD"}`), false},
-		{"ssl.nope", nil, false},
+		{"ping", "kore.ping", nil, true},
+		{"list-empty", "ssl.list", nil, true},
+		{"selfsign", "ssl.selfsign", json.RawMessage(`{"domain":"example.com","days":30}`), true},
+		{"list-after-selfsign", "ssl.list", nil, true},
+		{"renew-selfsigned", "ssl.renew", json.RawMessage(`{"domain":"example.com"}`), true},
+		{"verify-unreachable", "ssl.verify", json.RawMessage(`{"domain":"127.0.0.1:1"}`), true},
+		{"issue-unsupported", "ssl.issue", json.RawMessage(`{"domain":"example.com"}`), false},
+		{"selfsign-bad-domain", "ssl.selfsign", json.RawMessage(`{"domain":"BAD"}`), false},
+		{"import-missing-key", "ssl.import", json.RawMessage(`{"domain":"example.com","cert_pem":"x"}`), false},
+		{"verify-bad-target", "ssl.verify", json.RawMessage(`{"domain":"https://example.com"}`), false},
+		{"unknown-method", "ssl.nope", nil, false},
 	}
 	for _, tc := range cases {
-		req := &pluginapi.Request{Type: pluginapi.TypeRequest, ID: "id", ReqID: "r", Method: tc.method, Params: tc.params}
-		resp, shutdown := dispatch(req, cfg, svc, testLogger())
-		if shutdown {
-			t.Fatalf("%s 不应触发 shutdown", tc.method)
-		}
-		if tc.wantOK && resp.Error != nil {
-			t.Fatalf("%s 期望成功，得到错误 %v", tc.method, resp.Error)
-		}
-		if !tc.wantOK && resp.Error == nil {
-			t.Fatalf("%s 期望错误，得到成功", tc.method)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			req := &pluginapi.Request{Type: pluginapi.TypeRequest, ID: "id", ReqID: "r", Method: tc.method, Params: tc.params}
+			resp, shutdown := dispatch(req, cfg, svc, testLogger())
+			if shutdown {
+				t.Fatalf("%s 不应触发 shutdown", tc.method)
+			}
+			if tc.wantOK && resp.Error != nil {
+				t.Fatalf("%s 期望成功，得到错误 %v", tc.method, resp.Error)
+			}
+			if !tc.wantOK && resp.Error == nil {
+				t.Fatalf("%s 期望错误，得到成功", tc.method)
+			}
+			if tc.wantOK && len(resp.Result) == 0 {
+				t.Fatalf("%s 成功但没有结果", tc.method)
+			}
+			if !tc.wantOK && resp.Result != nil {
+				t.Fatalf("%s 出错时不应带结果", tc.method)
+			}
+		})
+	}
+}
+
+// TestDispatchRenewACMEUnsupported 校验 ACME 证书续期返回 E_UNSUPPORTED 而不是假成功。
+func TestDispatchRenewACMEUnsupported(t *testing.T) {
+	svc := newTestService(t)
+	acme := testACMEIssuedPair(t)
+	if _, perr := svc.Import(certs.ImportRequest{
+		Domain: "acme.example.com", CertPEM: acme.certPEM, KeyPEM: acme.keyPEM,
+	}); perr != nil {
+		t.Fatalf("导入 ACME 证书失败: %v", perr)
+	}
+	req := &pluginapi.Request{
+		Type: pluginapi.TypeRequest, ID: "id", ReqID: "r", Method: "ssl.renew",
+		Params: json.RawMessage(`{"domain":"acme.example.com"}`),
+	}
+	resp, _ := dispatch(req, testConfig(), svc, testLogger())
+	if resp.Error == nil || resp.Error.Code != pluginapi.E_UNSUPPORTED {
+		t.Fatalf("ACME 续期应 E_UNSUPPORTED，得到 %+v", resp.Error)
 	}
 }
 
 // TestDispatchShutdown 校验 kore.shutdown 返回 shutdown 信号。
 func TestDispatchShutdown(t *testing.T) {
 	req := &pluginapi.Request{Type: pluginapi.TypeRequest, ID: "id", ReqID: "r", Method: "kore.shutdown"}
-	_, shutdown := dispatch(req, testConfig(), certs.NewService(nil), testLogger())
+	_, shutdown := dispatch(req, testConfig(), newTestService(t), testLogger())
 	if !shutdown {
 		t.Fatal("kore.shutdown 应返回 shutdown=true")
+	}
+}
+
+// testPair 是测试用的证书 + 私钥 PEM 组合。
+type testPair struct {
+	certPEM string
+	keyPEM  string
+}
+
+// testACMEIssuedPair 造一张 issuer 为 Let's Encrypt R3 的证书（自签结构、非自签 issuer），
+// 用于验证 renew 的 ACME 识别分支：真实 ACME 证书不可能由本地签出，这里只验证归属判定。
+func testACMEIssuedPair(t *testing.T) testPair {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("生成测试私钥失败: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(4242),
+		Subject:               pkix.Name{CommonName: "acme.example.com"},
+		DNSNames:              []string{"acme.example.com"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(90 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+	}
+	parent := &x509.Certificate{Subject: pkix.Name{CommonName: "Let's Encrypt R3"}}
+	der, err := x509.CreateCertificate(rand.Reader, template, parent, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("生成 ACME 风格测试证书失败: %v", err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatalf("编码测试私钥失败: %v", err)
+	}
+	return testPair{
+		certPEM: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})),
+		keyPEM:  string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})),
 	}
 }

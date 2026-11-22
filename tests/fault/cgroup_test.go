@@ -1,44 +1,45 @@
-// Package fault 承载 ssl 插件的四类故障注入测试（G-20 / S-04）。
-// 本文件测 cgroup 超限故障：memory.max 触顶被 OOM 时，续期方法必须回内部错误。
 package fault
 
 import (
-	"context"
-	"strings"
 	"testing"
 
 	"github.com/pengtang1024/kore-plugin-ssl/internal/certs"
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
-// TestFaultCgroupLimit 注入 cgroup_limit 故障，断言 ssl.renew 返回 E_INTERNAL。
+// TestFaultCgroupLimit 注入 cgroup memory.max 触顶（OOM）：
+// 证书操作返回 E_INTERNAL，且不写盘。
 func TestFaultCgroupLimit(t *testing.T) {
-	issuer := &certs.StubIssuer{Fault: certs.Fault{Kind: certs.FaultCgroupLimit, Message: "memory.max=6M exceeded"}}
-	svc := certs.NewService(issuer)
-
-	cert, perr := svc.Renew(context.Background(), "cgroup.example.com")
-	if cert != nil {
-		t.Fatalf("cgroup 超限下不应返回证书，得到 %+v", cert)
+	svc, dir := newService(t, certs.FaultCgroupLimit)
+	info, perr := svc.SelfSign(certs.SelfSignRequest{Domain: "cgroup.example.com"})
+	if info != nil {
+		t.Fatalf("cgroup 超限下不应返回证书，得到 %+v", info)
 	}
-	if perr == nil {
-		t.Fatal("cgroup 超限下应返回错误")
-	}
-	if perr.Code != pluginapi.E_INTERNAL {
-		t.Fatalf("错误码=%q，期望 %q", perr.Code, pluginapi.E_INTERNAL)
-	}
-	if !strings.Contains(perr.Message, "OOM") && !strings.Contains(perr.Message, "cgroup") {
-		t.Fatalf("错误信息应含 OOM/cgroup，得到 %q", perr.Message)
-	}
+	assertError(t, perr, pluginapi.E_INTERNAL, "OOM")
+	assertNoCertFiles(t, dir)
 }
 
-// TestCgroupHealthyPath 校验无故障时续期成功并标记 renewed（对照组，防止空测试）。
-func TestCgroupHealthyPath(t *testing.T) {
-	svc := certs.NewService(&certs.StubIssuer{}) // 无故障：memory.max 充足
-	cert, perr := svc.Renew(context.Background(), "ok.example.com")
+// TestCgroupHealthyRenew 对照组：无故障时自签 + 续期完整闭环，
+// 证明故障断言之外真实路径可用（续期换新证书且仍是自签）。
+func TestCgroupHealthyRenew(t *testing.T) {
+	dir := t.TempDir()
+	svc := healthyService(dir)
+	first, perr := svc.SelfSign(certs.SelfSignRequest{Domain: "renew.example.com", Days: 30})
 	if perr != nil {
-		t.Fatalf("健康路径不应报错，得到 %v", perr)
+		t.Fatalf("自签失败: %v", perr)
 	}
-	if cert.Status != "renewed" || cert.Source != "stub" {
-		t.Fatalf("续期结果状态=%q source=%q，期望 renewed/stub", cert.Status, cert.Source)
+	renewed, perr := svc.Renew(certs.RenewRequest{Domain: "renew.example.com"})
+	if perr != nil {
+		t.Fatalf("自签续期失败: %v", perr)
+	}
+	if !renewed.Renewed || !renewed.SelfSigned {
+		t.Fatalf("续期结果应为 renewed/self_signed=true: %+v", renewed)
+	}
+	if renewed.FingerprintSHA256 == first.FingerprintSHA256 {
+		t.Fatal("续期后证书指纹应变化（新密钥 + 新序列号）")
+	}
+	list, perr := svc.List()
+	if perr != nil || list.Count != 1 {
+		t.Fatalf("续期后应只有 1 张证书，得到 count=%d err=%v", list.Count, perr)
 	}
 }

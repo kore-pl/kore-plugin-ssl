@@ -26,6 +26,7 @@ type manifest struct {
 }
 
 // config 是插件运行期配置：环境变量 + 内嵌清单，不读任何配置文件。
+// fault 只由 KORE_FAULT 注入（G-20 故障注入测试用），生产环境留空。
 type config struct {
 	socket       string
 	id           string
@@ -33,6 +34,7 @@ type config struct {
 	version      string
 	requiresKore string
 	capabilities []string
+	fault        string
 	startedAt    time.Time
 }
 
@@ -52,6 +54,7 @@ func loadConfig() (config, error) {
 		version:      m.Version,
 		requiresKore: m.RequiresKore,
 		capabilities: m.Capabilities,
+		fault:        os.Getenv("KORE_FAULT"),
 		startedAt:    time.Now(),
 	}
 	if cfg.id == "" {

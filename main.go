@@ -1,8 +1,9 @@
-// Package main 是 kore 的 ssl 插件：SSL 证书签发 / 自动续期 / 部署的骨架实现。
+// Package main 是 kore 的 ssl 插件：TLS 证书真实管理（扫描 / 导入 / 自签 / 续期判定 / TLS 探测）。
 //
-// 与 site（M4-B）同口径：只做参数校验 + 结构化结果，通过可注入的 Issuer 接口
-// 预留 ACME 通道；当前默认 StubIssuer 不连任何真实 CA，不捆绑 certbot/acme 二进制。
-// 续期触发由内核按 event:cert.renew_due 投递，插件内部不起 ticker（G-19）。
+// 业务层 internal/certs 只用 Go 标准库实现，不引入第三方 ACME 库、不捆绑
+// certbot/acme 二进制；v1 不实现 ACME 自动签发与续期，ssl.renew 对 ACME 证书
+// 如实返回 E_UNSUPPORTED（v1.1 跟进）。续期触发由内核按 event:cert.renew_due
+// 投递，插件内部不起 ticker（G-19）。
 //
 // 协议面（kore.plugin.v1）：连接内核注入的 UDS → kore.hello 握手 → 会话循环
 // 读 request、按 method 分发并回 response；stdout 留给协议，日志一律写 stderr。
@@ -41,6 +42,6 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	logger.Info("hello 完成", "plugin_id", cfg.id, "version", cfg.version)
-	svc := certs.NewService(nil) // 默认 StubIssuer：不连真实 CA
+	svc := certs.NewService(certs.Options{Fault: certs.ParseFault(cfg.fault)})
 	return serve(conn, cfg, svc, logger)
 }

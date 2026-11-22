@@ -1,37 +1,33 @@
-// Package fault 承载 ssl 插件的四类故障注入测试（G-20 / S-04）。
-// 本文件测磁盘满故障：证书落盘 ENOSPC 时，方法必须回内部错误且不写入清单。
 package fault
 
 import (
-	"context"
-	"strings"
 	"testing"
 
 	"github.com/pengtang1024/kore-plugin-ssl/internal/certs"
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
-// TestFaultDiskFull 注入 disk_full 故障，断言 ssl.issue 返回 E_INTERNAL 且不落库。
+// TestFaultDiskFull 注入磁盘满（ENOSPC）：落盘失败必须返回 E_INTERNAL，
+// 且不能出现"证书写了、私钥没写"的半成品状态。
 func TestFaultDiskFull(t *testing.T) {
-	issuer := &certs.StubIssuer{Fault: certs.Fault{Kind: certs.FaultDiskFull, Message: "/var/lib/kore/certs no space left"}}
-	svc := certs.NewService(issuer)
+	svc, dir := newService(t, certs.FaultDiskFull)
+	info, perr := svc.SelfSign(certs.SelfSignRequest{Domain: "disk.example.com"})
+	if info != nil {
+		t.Fatalf("磁盘满故障下不应返回证书，得到 %+v", info)
+	}
+	assertError(t, perr, pluginapi.E_INTERNAL, "ENOSPC")
+	assertNoCertFiles(t, dir)
+}
 
-	cert, perr := svc.Issue(context.Background(), "disk.example.com", "")
-	if cert != nil {
-		t.Fatalf("磁盘满故障下不应返回证书，得到 %+v", cert)
+// TestDiskFullImport 说明导入路径同样在入口被故障拦截，不会解析后写盘。
+func TestDiskFullImport(t *testing.T) {
+	svc, dir := newService(t, certs.FaultDiskFull)
+	info, perr := svc.Import(certs.ImportRequest{
+		Domain: "disk.example.com", CertPEM: "not-a-cert", KeyPEM: "not-a-key",
+	})
+	if info != nil {
+		t.Fatalf("磁盘满故障下导入不应返回证书，得到 %+v", info)
 	}
-	if perr == nil {
-		t.Fatal("磁盘满故障下应返回错误")
-	}
-	if perr.Code != pluginapi.E_INTERNAL {
-		t.Fatalf("错误码=%q，期望 %q", perr.Code, pluginapi.E_INTERNAL)
-	}
-	if !strings.Contains(perr.Message, "ENOSPC") {
-		t.Fatalf("错误信息应含 ENOSPC，得到 %q", perr.Message)
-	}
-
-	list, _ := svc.List()
-	if list.Count != 0 {
-		t.Fatalf("磁盘满失败不应污染清单，得到 count=%d", list.Count)
-	}
+	assertError(t, perr, pluginapi.E_INTERNAL, "ENOSPC")
+	assertNoCertFiles(t, dir)
 }
