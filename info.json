@@ -1,0 +1,17 @@
+{
+  "id": "ssl",
+  "name": "SSL 证书与自动续期插件",
+  "version": "0.1.0",
+  "protocol": "kore.plugin.v1",
+  "lifecycle": "lazy",
+  "depth_level": "production",
+  "entry": "bin/ssl",
+  "capabilities": ["system:admin"],
+  "triggers": ["event:cert.renew_due"],
+  "requires_kore": ">=0.1.0 <0.2.0",
+  "resources": {"memory_mb": 6, "cpu_quota": "15%", "pids_max": 24},
+  "depends_on": [],
+  "conflicts": [],
+  "scenario_tags": ["web", "sec"],
+  "size_bytes": 1361771
+}
