@@ -17,6 +17,8 @@ import (
 //   - 其它证书（公共 CA / 企业 CA 签发）：返回 E_UNSUPPORTED，提示改用 ssl.import。
 //
 // days 为 0 时沿用原证书的有效期跨度（四舍五入到天，最少 1 天）。
+// days_before > 0 时先做到期判定：剩余天数仍大于窗口就返回 renewed=false + skipped=not_due，
+// 不碰磁盘（定时任务每天调用靠它避免天天重签）。真正覆盖前会先备份旧证书。
 func (s *Service) Renew(req RenewRequest) (*RenewResult, *CertError) {
 	if perr := faultError(s.fault); perr != nil {
 		return nil, perr
@@ -26,6 +28,11 @@ func (s *Service) Renew(req RenewRequest) (*RenewResult, *CertError) {
 	}
 	if perr := validateDays(req.Days); perr != nil {
 		return nil, perr
+	}
+	if req.DaysBefore != 0 {
+		if perr := validateDaysBefore(req.DaysBefore); perr != nil {
+			return nil, perr
+		}
 	}
 	now := nowOr(s.now)
 	path, info, err := s.store.findCert(req.Domain, now)
@@ -42,6 +49,10 @@ func (s *Service) Renew(req RenewRequest) (*RenewResult, *CertError) {
 		return nil, err
 	}
 
+	// 到期窗口判定：未到点就如实回报"跳过"，既不改文件也不产生备份。
+	if req.DaysBefore > 0 && info.DaysLeft > req.DaysBefore {
+		return &RenewResult{CertInfo: info, Renewed: false, Skipped: "not_due"}, nil
+	}
 	// 自签续期：沿用原文件名与原密钥类型，避免生成第二份证书或降级算法。
 	certFileName := filepath.Base(path)
 	keyType, perr := renewKeyTypeFromInfo(info)
@@ -54,11 +65,16 @@ func (s *Service) Renew(req RenewRequest) (*RenewResult, *CertError) {
 	}
 	// 续期保留原证书的附加 SAN：多域名/回环联调证书不能因为续期丢掉覆盖范围。
 	extra := extraSANsFromInfo(info, req.Domain)
+	// 备份必须发生在覆盖之前：备份失败就中止，宁可这次不续期也不丢旧证书。
+	backupPath, backupErr := s.store.backupPair(certFileName, now)
+	if backupErr != nil {
+		return nil, internalErr("续期前备份旧证书失败（已中止，未覆盖原证书）: " + backupErr.Error())
+	}
 	renewed, err := s.issueSelfSigned(req.Domain, certFileName, days, keyType, extra, now)
 	if err != nil {
 		return nil, internalErr("自签续期失败: " + err.Error())
 	}
-	return &RenewResult{CertInfo: renewed, Renewed: true}, nil
+	return &RenewResult{CertInfo: renewed, Renewed: true, BackupPath: backupPath}, nil
 }
 
 // extraSANsFromInfo 提取原证书中除主域名外的标识，供续期保留。

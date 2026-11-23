@@ -11,6 +11,10 @@ type Options struct {
 	Fault         Fault
 	VerifyTimeout time.Duration
 	Now           func() time.Time
+	// ACMETools 是 ACME 客户端路径覆盖（键为工具名 certbot / acme.sh）：nil 走生产逻辑
+	// （PATH + 固定位置 + 家目录），非 nil 时只认这里显式给出的路径，
+	// 让"装了/没装客户端"两种情形都能确定性测试。
+	ACMETools map[string]string
 }
 
 // Service 是 ssl 业务方法层：所有状态都在固定证书目录里，进程内不缓存清单，
@@ -20,6 +24,7 @@ type Service struct {
 	fault         Fault
 	verifyTimeout time.Duration
 	now           func() time.Time
+	acmeTools     map[string]string
 }
 
 // NewService 构造服务；空参数得到"默认目录 + 无故障注入"的生产实例。
@@ -33,6 +38,7 @@ func NewService(opts Options) *Service {
 		fault:         opts.Fault,
 		verifyTimeout: opts.VerifyTimeout,
 		now:           opts.Now,
+		acmeTools:     opts.ACMETools,
 	}
 }
 

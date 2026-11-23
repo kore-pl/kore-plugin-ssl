@@ -103,15 +103,21 @@ type SelfSignRequest struct {
 }
 
 // RenewRequest 是 ssl.renew 的入参；Days 为 0 时沿用原证书有效期跨度。
+// DaysBefore > 0 时按"到期前多少天才续"判定，未到窗口返回 renewed=false + skipped=not_due
+// （定时任务每天调用时必须靠它避免天天重签）。
 type RenewRequest struct {
-	Domain string
-	Days   int
+	Domain     string
+	Days       int
+	DaysBefore int
 }
 
 // RenewResult 是续期结果：证书信息 + 是否真的重新签发。
+// BackupPath 是续期前旧证书备份目录（空表示本次未发生覆盖，未产生备份）。
 type RenewResult struct {
 	CertInfo
-	Renewed bool `json:"renewed"`
+	Renewed    bool   `json:"renewed"`
+	Skipped    string `json:"skipped,omitempty"`
+	BackupPath string `json:"backup_path,omitempty"`
 }
 
 // VerifyRequest 是 ssl.verify 的入参：host 或 host:port。
@@ -139,9 +145,11 @@ type VerifyResult struct {
 }
 
 // CertError 是业务方法错误：Code 取自 pluginapi.E_*，Message 带上下文且不含私钥。
+// Hint 是可选的下一步提示，协议层会放进 detail.hint（内核转成 HTTP 错误体的 hint 字段）。
 type CertError struct {
 	Code    string
 	Message string
+	Hint    string
 }
 
 // Error 实现 error 接口，返回 "code: message"。
@@ -155,6 +163,11 @@ func (e *CertError) Error() string {
 // newCertError 构造带协议错误码的方法错误。
 func newCertError(code, msg string) *CertError {
 	return &CertError{Code: code, Message: msg}
+}
+
+// newCertHintError 构造带可操作提示的方法错误（hint 走协议 detail，不塞进 message）。
+func newCertHintError(code, msg, hint string) *CertError {
+	return &CertError{Code: code, Message: msg, Hint: hint}
 }
 
 // FaultKind 是故障注入类型；值即故障标识，便于测试与日志直接比对。

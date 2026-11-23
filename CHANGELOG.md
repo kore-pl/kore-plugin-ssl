@@ -5,6 +5,48 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-11-23
+
+### Added
+
+- `ssl.expiring`：到期聚合视图 `{expiring:[{name, path, not_after, days_left,
+  severity}], checked}`。窗口 `days`（缺省 30，严格小于）决定纳入范围，分级按固定
+  阈值：`<7` critical、`<30` warning、其余 ok；已过期落在 critical。剩余天数用证书
+  `NotAfter` 绝对时刻相减（与 `ssl.list` 同一口径，不受时区/格式影响），
+  `not_after` 统一 UTC RFC3339。
+- `ssl.renew.set`：生成"待创建自动续期任务"描述，**不直接调内核 API**（调度归内核
+  ADR-0019）。返回 `{created:false, task_id:"", next_run_at, recommended_task:{name,
+  plugin:"ssl", method:"ssl.renew", params:{name, days_before}, schedule:"0 3 * * *"},
+  hint}`；任务名 `ssl-renew-<name>`，超 64 字符时截断并附域名 SHA-256 前 8 位；
+  `next_run_at` 按本地时区算下一个 03:00。证书不存在返回 `E_NOTFOUND` + hint。
+- `ssl.acme.status`：只读探测本机 `certbot` / `acme.sh`（PATH → 固定安装位置 →
+  家目录），返回 `{available, tool, version}`；缺工具不是错误，`available=false`。
+- `ssl.acme.issue`：**需 `confirm=true` 显式确认**（G-10 无联网，只能用户触发）后
+  调用外部客户端（certbot `certonly --standalone` / acme.sh `--issue --standalone`），
+  工作目录限制在 `<证书目录>/acme/<tool>`（0700），签出的证书经 `ssl.import` 纳入
+  管理并写 `<base>.acme` 归属标记（此后 `ssl.renew` 不会当自签重签）。未确认
+  `E_INVALID`、无客户端 `E_UNSUPPORTED`，两者都带 hint；工具失败 `E_UPSTREAM` +
+  输出尾部。私钥内容绝不进返回值，只给路径与指纹。
+- `ssl.renew` 新增可选 `days_before`：剩余天数大于窗口时返回
+  `{renewed:false, skipped:"not_due"}`，不碰磁盘（定时任务每天调用不会天天重签）。
+- 续期前备份：覆盖前把旧证书/私钥/链复制到 `<证书目录>/backups/<base>-<时间戳>.*`
+  （证书 0644、私钥 0600、目录 0700），结果返回 `backup_path`；备份失败则中止续期，
+  绝不丢旧证书；每张证书保留最近 5 份（自动清理）。
+
+### Changed
+
+- 版本号 0.2.1 → 0.3.0（新能力为 feat，minor）。
+- `ssl.issue` 兼容入口的说明改为指向 `ssl.acme.status` / `ssl.acme.issue`
+  （内置 ACME 仍未实现，不返回假证书）。
+- 协议错误支持 `detail.hint`：`E_UNSUPPORTED` / `E_INVALID` / `E_UPSTREAM` 现在带
+  可操作下一步（内核映射为 HTTP 错误体的 `hint` 字段）。
+
+### Security
+
+- ACME 签发双闸门：`confirm=true` + 本机客户端存在；不做后台自动申请（G-10）。
+- 外部客户端以 argv 数组执行（不经 shell），账号/证书/日志目录 0700。
+- 备份私钥同样 0600，续期失败时旧证书可回滚。
+
 ## [0.2.1] - 2026-11-23
 
 - build: 位级可复现打包（stage chmod + tar --mode 归一、size_bytes 收敛），二进制改嵌 manifest.json，消除同版本 sha 漂移

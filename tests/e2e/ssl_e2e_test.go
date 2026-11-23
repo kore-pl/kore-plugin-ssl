@@ -46,7 +46,48 @@ type listResult struct {
 // renewResult 是 ssl.renew 的结果。
 type renewResult struct {
 	certInfo
-	Renewed bool `json:"renewed"`
+	Renewed    bool   `json:"renewed"`
+	Skipped    string `json:"skipped,omitempty"`
+	BackupPath string `json:"backup_path,omitempty"`
+}
+
+// expiringEntry / expiringResult 是 ssl.expiring 的聚合视图。
+type expiringEntry struct {
+	Name     string `json:"name"`
+	Path     string `json:"path"`
+	NotAfter string `json:"not_after"`
+	DaysLeft int    `json:"days_left"`
+	Severity string `json:"severity"`
+}
+
+type expiringResult struct {
+	Expiring []expiringEntry `json:"expiring"`
+	Checked  int             `json:"checked"`
+}
+
+// renewalTaskResult 是 ssl.renew.set 的待创建任务描述。
+type renewalTaskResult struct {
+	Created   bool   `json:"created"`
+	TaskID    string `json:"task_id"`
+	NextRunAt string `json:"next_run_at"`
+	Hint      string `json:"hint"`
+	Task      struct {
+		Name     string `json:"name"`
+		Plugin   string `json:"plugin"`
+		Method   string `json:"method"`
+		Schedule string `json:"schedule"`
+		Params   struct {
+			Name       string `json:"name"`
+			DaysBefore int    `json:"days_before"`
+		} `json:"params"`
+	} `json:"recommended_task"`
+}
+
+// acmeStatusResult 是 ssl.acme.status 的探测结果。
+type acmeStatusResult struct {
+	Available bool   `json:"available"`
+	Tool      string `json:"tool"`
+	Version   string `json:"version"`
 }
 
 // verifyResult 是 ssl.verify 的结果。
@@ -200,6 +241,28 @@ func TestSSLPluginE2E(t *testing.T) {
 	if mode := modeOf(t, keyFile); mode != 0o600 {
 		t.Fatalf("续期后私钥权限=%#o，期望 0600", mode)
 	}
+	if renewed.BackupPath == "" {
+		t.Fatalf("续期必须返回 backup_path: %s", renewRaw)
+	}
+	var backupCert, backupKey int
+	backupEntries, backupErr := os.ReadDir(renewed.BackupPath)
+	if backupErr != nil {
+		t.Fatalf("续期前备份目录不可读: %v", backupErr)
+	}
+	for _, entry := range backupEntries {
+		switch {
+		case strings.HasSuffix(entry.Name(), ".crt"):
+			backupCert++
+		case strings.HasSuffix(entry.Name(), ".key"):
+			backupKey++
+			if mode := modeOf(t, filepath.Join(renewed.BackupPath, entry.Name())); mode != 0o600 {
+				t.Fatalf("备份私钥权限=%#o，期望 0600", mode)
+			}
+		}
+	}
+	if backupCert == 0 || backupKey == 0 {
+		t.Fatalf("续期备份缺文件：crt=%d key=%d（目录 %s）", backupCert, backupKey, renewed.BackupPath)
+	}
 	if !contains(renewed.Domains, "127.0.0.1") {
 		t.Fatalf("续期应保留附加 SAN 127.0.0.1: %v", renewed.Domains)
 	}
@@ -250,7 +313,101 @@ func TestSSLPluginE2E(t *testing.T) {
 	}
 	t.Logf("E2E_RENEW_NONSELF code=%s message=%s", corpResp.Error.Code, corpResp.Error.Message)
 
-	// --- 10. 最终 list：4 张证书（自签续期后仍只有 1 份）---
+	// --- 10. expiring：聚合视图（阈值 fixed：<7 critical / <30 warning / 其余 ok）---
+	expiringRaw := mustCall(t, conn, "e2e-expiring", "ssl.expiring", map[string]any{})
+	var expiring expiringResult
+	if err := json.Unmarshal([]byte(expiringRaw), &expiring); err != nil {
+		t.Fatalf("解析 expiring 失败: %v (%s)", err, expiringRaw)
+	}
+	if expiring.Checked != 4 {
+		t.Fatalf("expiring.checked=%d，期望 4: %s", expiring.Checked, expiringRaw)
+	}
+	for _, item := range expiring.Expiring {
+		if item.DaysLeft >= 30 || item.Severity == "ok" {
+			t.Fatalf("默认 30 天窗口不应有 ok/超窗口条目: %+v", item)
+		}
+		if !filepath.IsAbs(item.Path) {
+			t.Fatalf("path 必须是绝对路径: %+v", item)
+		}
+	}
+	wideRaw := mustCall(t, conn, "e2e-expiring-wide", "ssl.expiring", map[string]any{"days": 3650})
+	var wide expiringResult
+	if err := json.Unmarshal([]byte(wideRaw), &wide); err != nil {
+		t.Fatalf("解析宽窗口 expiring 失败: %v", err)
+	}
+	if len(wide.Expiring) != 4 || wide.Checked != 4 {
+		t.Fatalf("3650 天窗口应覆盖 4 张: %s", wideRaw)
+	}
+	for _, item := range wide.Expiring {
+		if item.Severity != "ok" {
+			t.Fatalf("远期证书应为 ok: %+v", item)
+		}
+	}
+	t.Logf("E2E_EXPIRING %s", expiringRaw)
+	t.Logf("E2E_EXPIRING_WIDE %s", wideRaw)
+
+	// --- 11. renew.set：返回待创建任务描述（插件不直接调内核 API）---
+	setRaw := mustCall(t, conn, "e2e-renew-set", "ssl.renew.set", map[string]any{
+		"name": "test.kore.local", "days_before": 7,
+	})
+	var task renewalTaskResult
+	if err := json.Unmarshal([]byte(setRaw), &task); err != nil {
+		t.Fatalf("解析 renew.set 失败: %v (%s)", err, setRaw)
+	}
+	if task.Created || task.TaskID != "" {
+		t.Fatalf("插件不能创建内核任务: %s", setRaw)
+	}
+	if task.Task.Name != "ssl-renew-test.kore.local" || task.Task.Plugin != "ssl" ||
+		task.Task.Method != "ssl.renew" || task.Task.Schedule != "0 3 * * *" {
+		t.Fatalf("推荐任务定义不符: %s", setRaw)
+	}
+	if task.Task.Params.Name != "test.kore.local" || task.Task.Params.DaysBefore != 7 {
+		t.Fatalf("推荐任务参数不符: %s", setRaw)
+	}
+	if _, err := time.Parse(time.RFC3339, task.NextRunAt); err != nil {
+		t.Fatalf("next_run_at 不是 RFC3339: %q", task.NextRunAt)
+	}
+	if !strings.Contains(task.Hint, "/api/v1/scheduler/tasks") {
+		t.Fatalf("hint 应指向内核 scheduler 端点: %q", task.Hint)
+	}
+	t.Logf("E2E_RENEW_SET %s", setRaw)
+
+	// 未到窗口时 ssl.renew 只回报跳过，不重签（定时任务每天调用的正确行为）。
+	skipRaw := mustCall(t, conn, "e2e-renew-skip", "ssl.renew", map[string]any{
+		"domain": "test.kore.local", "days_before": 7,
+	})
+	var skipped renewResult
+	if err := json.Unmarshal([]byte(skipRaw), &skipped); err != nil {
+		t.Fatalf("解析跳过续期失败: %v", err)
+	}
+	if skipped.Renewed || skipped.Skipped != "not_due" {
+		t.Fatalf("未到 7 天窗口应跳过: %s", skipRaw)
+	}
+	t.Logf("E2E_RENEW_SKIPPED %s", skipRaw)
+
+	// --- 12. acme.status：本机有无客户端如实返回；未确认时不联网 ---
+	statusRaw := mustCall(t, conn, "e2e-acme-status", "ssl.acme.status", map[string]any{})
+	var status acmeStatusResult
+	if err := json.Unmarshal([]byte(statusRaw), &status); err != nil {
+		t.Fatalf("解析 acme.status 失败: %v (%s)", err, statusRaw)
+	}
+	if status.Available {
+		if status.Tool == "" || status.Version == "" {
+			t.Fatalf("可用时必须给出 tool/version: %s", statusRaw)
+		}
+	} else if status.Tool != "" || status.Version != "" {
+		t.Fatalf("不可用时 tool/version 应为空: %s", statusRaw)
+	}
+	issueResp := request(t, conn, "e2e-acme-issue", "ssl.acme.issue", map[string]any{
+		"domain": "acme.example.com", "email": "ops@example.com",
+	})
+	if issueResp.Error == nil || issueResp.Error.Code != "E_INVALID" {
+		t.Fatalf("未 confirm 的 ACME 签发应 E_INVALID，得到 %+v", issueResp.Error)
+	}
+	t.Logf("E2E_ACME_STATUS %s", statusRaw)
+	t.Logf("E2E_ACME_ISSUE_GUARD code=%s message=%s", issueResp.Error.Code, issueResp.Error.Message)
+
+	// --- 13. 最终 list：4 张证书（自签续期后仍只有 1 份）---
 	finalRaw := mustCall(t, conn, "e2e-list-final", "ssl.list", map[string]any{})
 	var final listResult
 	if err := json.Unmarshal([]byte(finalRaw), &final); err != nil {
@@ -261,7 +418,7 @@ func TestSSLPluginE2E(t *testing.T) {
 	}
 	t.Logf("E2E_LIST_FINAL %s", finalRaw)
 
-	// --- 11. shutdown：优雅退出，退出码 0 ---
+	// --- 14. shutdown：优雅退出，退出码 0 ---
 	shutdownResp := request(t, conn, "e2e-shutdown", "kore.shutdown", map[string]any{})
 	if shutdownResp.Error != nil {
 		t.Fatalf("shutdown 失败: %+v", shutdownResp.Error)

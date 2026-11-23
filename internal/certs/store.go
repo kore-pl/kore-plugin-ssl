@@ -33,6 +33,13 @@ func newCertStore(dir string) *certStore {
 	return &certStore{dir: dir}
 }
 
+// backupDirName 是续期前旧证书的备份子目录名。
+// 放在证书目录下的独立子目录：scan 只读顶层文件并跳过目录，备份不会混进 ssl.list。
+const backupDirName = "backups"
+
+// backupKeep 是每张证书保留的历史备份份数上限（按时间戳倒序保留最新 N 份）。
+const backupKeep = 5
+
 // certPath 返回域名对应的证书路径（写 .crt）。
 func (s *certStore) certPath(domain string) string {
 	return filepath.Join(s.dir, domain+certSuffix)
@@ -300,4 +307,94 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// backupPair 在覆盖证书前把现有证书 / 私钥 / 独立链复制到 <dir>/backups/<base>-<ts>.*，
+// 返回备份目录的绝对路径。证书文件不存在时返回空路径（无内容可备份，不算失败）。
+//
+// 备份先于续期执行：只有备份成功才允许覆盖，续期失败时旧证书仍在磁盘上可回滚。
+// 超过 backupKeep 份的历史备份按时间戳倒序清理（清理失败不阻断续期，只影响体积）。
+func (s *certStore) backupPair(certFileName string, now time.Time) (string, error) {
+	base := trimCertSuffix(certFileName)
+	certPath := filepath.Join(s.dir, certFileName)
+	certData, err := os.ReadFile(certPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("读取待备份证书 %s: %w", certPath, err)
+	}
+	backupDir := filepath.Join(s.dir, backupDirName)
+	if err := os.MkdirAll(backupDir, dirMode); err != nil {
+		return "", fmt.Errorf("创建备份目录 %s: %w", backupDir, err)
+	}
+	if err := os.Chmod(backupDir, dirMode); err != nil {
+		return "", fmt.Errorf("设置备份目录权限 %s: %w", backupDir, err)
+	}
+	stamp := now.UTC().Format("20060102T150405Z")
+	stem := base + "-" + stamp
+	// 证书 0644；私钥 0600（备份同样不能放宽私钥权限）；链 0644。
+	if err := atomicWriteFile(filepath.Join(backupDir, stem+certSuffix), certData, certFileMode); err != nil {
+		return "", fmt.Errorf("备份证书: %w", err)
+	}
+	for _, item := range []struct {
+		suffix string
+		mode   os.FileMode
+	}{
+		{keySuffix, keyFileMode},
+		{chainSuffix, certFileMode},
+	} {
+		data, readErr := os.ReadFile(filepath.Join(s.dir, base+item.suffix))
+		if errors.Is(readErr, os.ErrNotExist) {
+			continue
+		}
+		if readErr != nil {
+			return "", fmt.Errorf("读取待备份文件 %s: %w", base+item.suffix, readErr)
+		}
+		if err := atomicWriteFile(filepath.Join(backupDir, stem+item.suffix), data, item.mode); err != nil {
+			return "", fmt.Errorf("备份 %s: %w", item.suffix, err)
+		}
+	}
+	pruneBackups(backupDir, base)
+	abs, absErr := filepath.Abs(backupDir)
+	if absErr != nil {
+		return backupDir, nil
+	}
+	return abs, nil
+}
+
+// pruneBackups 只保留某张证书最新的 backupKeep 份备份（按文件名里的时间戳排序）。
+// 删除失败不返回错误：备份的价值在"有"，清理只是控制体积。
+func pruneBackups(backupDir, base string) {
+	entries, err := os.ReadDir(backupDir)
+	if err != nil {
+		return
+	}
+	stems := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasPrefix(name, base+"-") {
+			continue
+		}
+		for _, suffix := range []string{chainSuffix, certSuffix, keySuffix} {
+			if trimmed, ok := strings.CutSuffix(name, suffix); ok {
+				stems[trimmed] = struct{}{}
+				break
+			}
+		}
+	}
+	if len(stems) <= backupKeep {
+		return
+	}
+	ordered := make([]string, 0, len(stems))
+	for stem := range stems {
+		ordered = append(ordered, stem)
+	}
+	// 时间戳是 20060102T150405Z 定宽格式，字典序即时间序。
+	sort.Sort(sort.Reverse(sort.StringSlice(ordered)))
+	for _, stem := range ordered[backupKeep:] {
+		for _, suffix := range []string{certSuffix, keySuffix, chainSuffix} {
+			_ = os.Remove(filepath.Join(backupDir, stem+suffix))
+		}
+	}
 }

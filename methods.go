@@ -54,7 +54,8 @@ func dispatch(request *pluginapi.Request, cfg config, svc *certs.Service, logger
 func businessVerb(method, id string) (string, bool) {
 	verb := strings.TrimPrefix(method, id+".")
 	switch verb {
-	case "list", "import", "selfsign", "renew", "verify", "issue":
+	case "list", "import", "selfsign", "renew", "verify", "issue",
+		"expiring", "renew.set", "acme.status", "acme.issue":
 		return verb, true
 	default:
 		return "", false
@@ -77,15 +78,43 @@ type selfSignParams struct {
 	ExtraSANs []string `json:"extra_sans"`
 }
 
-// renewParams 是 ssl.renew 的入参：domain 必填，days 为 0 时沿用原有效期跨度。
+// renewParams 是 ssl.renew 的入参：domain 必填，days 为 0 时沿用原有效期跨度；
+// days_before > 0 时只在剩余天数不超过它时才真正重签（定时任务用）。
 type renewParams struct {
-	Domain string `json:"domain"`
-	Days   int    `json:"days"`
+	Domain     string `json:"domain"`
+	Days       int    `json:"days"`
+	DaysBefore int    `json:"days_before"`
 }
 
 // verifyParams 是 ssl.verify 的入参：host 或 host:port。
 type verifyParams struct {
 	Domain string `json:"domain"`
+}
+
+// expiringParams 是 ssl.expiring 的入参：days 是纳入窗口（天），缺省 30。
+type expiringParams struct {
+	Days int `json:"days"`
+}
+
+// renewSetParams 是 ssl.renew.set 的入参：name 为证书主域名，days_before 为提前量。
+type renewSetParams struct {
+	Name       string `json:"name"`
+	DaysBefore int    `json:"days_before"`
+}
+
+// acmeStatusParams 是 ssl.acme.status 的入参（无字段，保留形状校验）。
+type acmeStatusParams struct{}
+
+// acmeIssueParams 是 ssl.acme.issue 的入参：confirm 必须为 true 才联网签发。
+type acmeIssueParams struct {
+	Domain  string `json:"domain"`
+	Email   string `json:"email"`
+	Confirm bool   `json:"confirm"`
+}
+
+// errorDetail 是协议错误 detail 的形状：只承载 hint，内核据此填 HTTP 错误体的 hint 字段。
+type errorDetail struct {
+	Hint string `json:"hint"`
 }
 
 // handleSSLVerb 执行 ssl 方法；业务层返回的 CertError 统一转成协议错误体。
@@ -99,12 +128,57 @@ func handleSSLVerb(verb string, params json.RawMessage, svc *certs.Service, resp
 		response.Result = encode(result)
 		return nil
 	case "issue":
-		// 兼容入口：老调用方可能仍发 ssl.issue。ACME 未实现就如实说，不返回假证书。
+		// 兼容入口：老调用方可能仍发 ssl.issue。内置 ACME 未实现就如实说，不返回假证书；
+		// hint 指向本轮新增的显式通道（ssl.acme.status / ssl.acme.issue）。
 		return &pluginapi.Error{
 			Code: pluginapi.E_UNSUPPORTED,
-			Message: "ACME 签发未实现（v1.1 跟进）：当前请用 ssl.selfsign 生成自签证书，" +
-				"或用 ssl.import 导入已有证书",
+			Message: "内置 ACME 签发未实现：请先 ssl.acme.status 检查本机客户端，" +
+				"再用 ssl.acme.issue（需 confirm=true）调用 certbot / acme.sh",
+			Detail: encode(errorDetail{Hint: "无 ACME 客户端时用 ssl.selfsign 生成自签证书，或用 ssl.import 导入已有证书"}),
 		}
+	case "expiring":
+		p, perr := parseExpiringParams(params)
+		if perr != nil {
+			return toProtocolError(perr)
+		}
+		result, cerr := svc.Expiring(certs.ExpiringRequest{Days: p.Days})
+		if cerr != nil {
+			return toProtocolError(cerr)
+		}
+		response.Result = encode(result)
+		return nil
+	case "renew.set":
+		p, perr := parseRenewSetParams(params)
+		if perr != nil {
+			return toProtocolError(perr)
+		}
+		result, cerr := svc.RenewalTask(certs.RenewalTaskRequest{Name: p.Name, DaysBefore: p.DaysBefore})
+		if cerr != nil {
+			return toProtocolError(cerr)
+		}
+		response.Result = encode(result)
+		return nil
+	case "acme.status":
+		if _, perr := parseACMEStatusParams(params); perr != nil {
+			return toProtocolError(perr)
+		}
+		result, cerr := svc.ACMEStatus()
+		if cerr != nil {
+			return toProtocolError(cerr)
+		}
+		response.Result = encode(result)
+		return nil
+	case "acme.issue":
+		p, perr := parseACMEIssueParams(params)
+		if perr != nil {
+			return toProtocolError(perr)
+		}
+		result, cerr := svc.ACMEIssue(certs.ACMEIssueRequest{Domain: p.Domain, Email: p.Email, Confirm: p.Confirm})
+		if cerr != nil {
+			return toProtocolError(cerr)
+		}
+		response.Result = encode(result)
+		return nil
 	case "import":
 		p, perr := parseImportParams(params)
 		if perr != nil {
@@ -136,7 +210,7 @@ func handleSSLVerb(verb string, params json.RawMessage, svc *certs.Service, resp
 		if perr != nil {
 			return toProtocolError(perr)
 		}
-		result, cerr := svc.Renew(certs.RenewRequest{Domain: p.Domain, Days: p.Days})
+		result, cerr := svc.Renew(certs.RenewRequest{Domain: p.Domain, Days: p.Days, DaysBefore: p.DaysBefore})
 		if cerr != nil {
 			return toProtocolError(cerr)
 		}
@@ -194,6 +268,42 @@ func parseVerifyParams(raw json.RawMessage) (verifyParams, *certs.CertError) {
 	return p, nil
 }
 
+// parseExpiringParams 校验 ssl.expiring 入参形状并反序列化。
+func parseExpiringParams(raw json.RawMessage) (expiringParams, *certs.CertError) {
+	var p expiringParams
+	if perr := unmarshalParams(raw, &p, "ssl.expiring"); perr != nil {
+		return p, perr
+	}
+	return p, nil
+}
+
+// parseRenewSetParams 校验 ssl.renew.set 入参形状并反序列化。
+func parseRenewSetParams(raw json.RawMessage) (renewSetParams, *certs.CertError) {
+	var p renewSetParams
+	if perr := unmarshalParams(raw, &p, "ssl.renew.set"); perr != nil {
+		return p, perr
+	}
+	return p, nil
+}
+
+// parseACMEStatusParams 校验 ssl.acme.status 入参形状（不接受数组/标量）。
+func parseACMEStatusParams(raw json.RawMessage) (acmeStatusParams, *certs.CertError) {
+	var p acmeStatusParams
+	if perr := unmarshalParams(raw, &p, "ssl.acme.status"); perr != nil {
+		return p, perr
+	}
+	return p, nil
+}
+
+// parseACMEIssueParams 校验 ssl.acme.issue 入参形状并反序列化。
+func parseACMEIssueParams(raw json.RawMessage) (acmeIssueParams, *certs.CertError) {
+	var p acmeIssueParams
+	if perr := unmarshalParams(raw, &p, "ssl.acme.issue"); perr != nil {
+		return p, perr
+	}
+	return p, nil
+}
+
 // unmarshalParams 要求 params 是 JSON 对象（或空/null 交由业务层判必填）。
 func unmarshalParams(raw json.RawMessage, dst any, method string) *certs.CertError {
 	if len(raw) == 0 || string(raw) == "null" {
@@ -222,9 +332,14 @@ func notFound(method string) *pluginapi.Error {
 	return &pluginapi.Error{Code: pluginapi.E_NOTFOUND, Message: "未知方法：" + method}
 }
 
+// toProtocolError 把业务错误转成协议错误，并把 hint 放进 detail（内核映射成 HTTP hint 字段）。
 func toProtocolError(cerr *certs.CertError) *pluginapi.Error {
 	if cerr == nil {
 		return nil
 	}
-	return &pluginapi.Error{Code: cerr.Code, Message: cerr.Message}
+	perr := &pluginapi.Error{Code: cerr.Code, Message: cerr.Message}
+	if cerr.Hint != "" {
+		perr.Detail = encode(errorDetail{Hint: cerr.Hint})
+	}
+	return perr
 }
