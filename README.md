@@ -1,7 +1,7 @@
 # kore-plugin-ssl
 
-kore 的 TLS 证书管理插件（M5 批 1 · 生产级）：证书扫描解析、导入、自签、续期判定
-与真实 TLS 握手探测。
+kore 的 TLS 证书管理插件（M5 批 1 · 生产级）：证书扫描解析、导入、自签、续期判定、
+真实 TLS 握手探测，以及「证书 → 站点」归属登记与强制 HTTPS 的**只读判定**。
 
 ## 能力
 
@@ -11,6 +11,9 @@ kore 的 TLS 证书管理插件（M5 批 1 · 生产级）：证书扫描解析�
   二进制、不内置 web server（裁决 37）。
 - `lifecycle=lazy`：不常驻；续期由内核按 `event:cert.renew_due` 事件触发，
   插件内部不起 ticker（G-19）。
+- **不写 web 服务器配置**：站点绑定、443 监听、80→443 跳转的唯一归属方是 `site`
+  插件（`site.bindSSL` / `site.unbindSSL` / `site.setRedirect`）。本仓只登记归属、
+  给出推荐载荷、只读判定实际行为，越权路径由 `boundary_test.go` 断言拦住。
 
 ## 方法（kore.plugin.v1）
 
@@ -26,6 +29,10 @@ kore 的 TLS 证书管理插件（M5 批 1 · 生产级）：证书扫描解析�
 | `ssl.acme.status` | 无 | `{available, tool, version}`（只读探测本机客户端） |
 | `ssl.acme.issue` | `{domain, email, confirm:true}` | 签发结果（证书元数据 + 路径）；未确认 `E_INVALID`、无客户端 `E_UNSUPPORTED` |
 | `ssl.issue` | 兼容入口 | `E_UNSUPPORTED` + hint：指向 `ssl.acme.status` / `ssl.acme.issue` |
+| `ssl.bind.set` | `{cert, site, note?, probe?:{http_port,https_port}}` | 归属登记（一对一冲突校验）+ 站点侧推荐载荷 `site_bind`；显式给 `probe` 时附带只读 HTTPS 判定 |
+| `ssl.bind.remove` | `{cert?, site?}`（至少一个） | `{removed, binding, hint}`；只解除本仓登记，站点侧需 `site.unbindSSL` |
+| `ssl.bind.list` | 无 | `{bindings:[{cert, site, note, created_at, updated_at, cert_path, key_path, cert_exists}], count}` |
+| `ssl.https.status` | `{domain, http_port?, https_port?}` | `{https:{reachable,matched,...}, http:{status_code,location,redirects_to_https}, force_https, verdict, site_action, hint}` |
 
 `ssl.list` 条目字段：`domain / domains(SAN+CN) / file / not_before / not_after /
 days_left / issuer / subject / serial / is_ca / key_type / key_bits /
@@ -100,6 +107,35 @@ kore 仓库 `docs/DECISIONS/0020-acme.md`（ADR-0020）。插件只做两件事�
 - 每张证书保留最近 5 份，超出自动清理。
 - `backups/` 是子目录，`ssl.list` / `ssl.expiring` 的扫描不会把它当证书。
 
+## 站点归属登记（ssl.bind.*）
+
+**归本仓的**：记「这张证书属于哪个站点」——一条记录只含 `cert` / `site` / `note` /
+时间戳，落在 `<证书目录>/bindings.json`（0600，目录 0700）。
+**不归本仓的**：写站点配置。把证书写进 443 监听、生成 80→443 跳转，只有 `site`
+插件能做（`site.bindSSL`，其中 `force_https` 默认 `true`）。
+
+- 一对一约束：一张证书只能属于一个站点，一个站点也只能挂一张证书；
+  违反返回 `E_CONFLICT` + hint（先 `ssl.bind.remove` 解除旧归属）。
+- 同对重复登记幂等：`created=false`，只刷新 `note` / `updated_at`，`created_at` 不变。
+- `cert` 必须真实存在于证书目录，否则 `E_NOTFOUND`（不允许登记指向空气的归属）。
+- 结果里的 `site_bind` 是**建议载荷**（`plugin/method/params`，含证书与私钥绝对路径），
+  由用户在站点页发起；本仓既不 dial `site` 的 socket（协议层禁止插件间直连），
+  也不替它写配置。
+- 证书被删除后归属仍保留但 `cert_exists=false`（陈旧归属可见、可清理）。
+
+## 强制 HTTPS（ssl.https.status，只读判定）
+
+- 判定口径：443 能否完成 TLS 握手、80 是否把 `/` 3xx 跳到 `https://`。
+  `verdict` 三值：`force-https`（已生效）/ `https-without-redirect`（443 可用但 80 未跳）/
+  `https-unreachable`（443 不可握手）。
+- **只读**：不跟随跳转（只读第一跳状态码与 `Location`）、不改任何配置、不 reload。
+- 开启跳转在站点侧：全局 80→443 用 `site.bindSSL` 的 `force_https`（默认 `true`）；
+  只需某条路径跳转时用 `site.setRedirect`（精确路径匹配，`to_url` 只接受
+  `http(s)://` 或站内路径）。结果里的 `site_action` 给出这个建议载荷。
+- 端口默认 80 / 443，可显式给（联调与测试用）；探测失败是观测值
+  （`reachable=false + error`），不映射成协议错误。
+- 显式触发才出站：登记时的 `probe` 是可选参数，`ssl.bind.list` 永不联网。
+
 ## 校验链（ssl.import）
 
 1. `cert_pem` 必须能被 `x509.ParseCertificate` 解析（允许 fullchain，首块为叶子）；
@@ -133,7 +169,11 @@ kore 仓库 `docs/DECISIONS/0020-acme.md`（ADR-0020）。插件只做两件事�
   `ssl.list` 只解析证书公钥信息。
 - 域名白名单：小写字母数字/连字符/点，至少两个标签，拒绝 `..` 与路径分隔符；
   文件名落盘前再经 `withinDir` 二次校验。
-- 不联网：除 `ssl.verify` 的用户显式请求外无任何出站连接。
+- 不联网：只有 `ssl.verify` 与 `ssl.https.status`（及 `ssl.bind.set` 显式带 `probe`）
+  会出站，全部由用户显式调用触发；没有后台任务、没有隐式上报（G-10）。
+- 不写 web 服务器配置：由 `boundary_test.go` 静态断言把关——Go 代码里不得出现
+  配置目录 / 配置指令 / reload 命令片段；`net.Dial` 只允许 `main.go` 连内核 UDS；
+  `exec` 只允许 ACME 客户端（ADR-0020）；生产代码不得出现 `time.NewTicker` 等周期来源。
 
 ## 构建与验收
 
@@ -143,13 +183,14 @@ go vet ./...
 go test -timeout 200s ./...     # 单元 + 故障注入 + 真实 E2E（插件二进制 + UDS + TLS）
 make build
 make dist
-tar tzf dist/ssl-0.3.0.tar.gz | head -1   # 必须是 info.json
+tar tzf dist/ssl-0.4.0.tar.gz | head -1   # 必须是 info.json
 ```
 
 `make check` 聚合 gofmt / vet / test。`dist` 采用确定性打包
 （`--sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner` + `gzip -9n`），
-同源码两次出包 SHA 一致。`info.json` 经 `go:embed` 进入二进制，故 `size_bytes`
-为提交前按实测包体积回写的定值，`dist` 不修改它，避免 SHA 漂移。
+同源码两次出包 SHA 一致。`manifest.json` 经 `go:embed` 进入二进制；`info.json`
+的 `size_bytes` 由 `dist` 迭代收敛后回写（与包体实际字节差 ≤2），因此重复执行
+`make dist` 幂等、SHA 不漂移。
 
 ## 测试
 
@@ -157,7 +198,13 @@ tar tzf dist/ssl-0.3.0.tar.gz | head -1   # 必须是 info.json
   （私钥不匹配 / SAN 不含 domain / 加密私钥）、过期与临期标记、多证书扫描、
   指纹去重、ACME 标记、续期分支与 SAN 保留、探测匹配与不匹配、
   到期分级与窗口边界、任务描述（含超长域名截断）、续期前备份与保留份数、
-  ACME 工具探测（真脚本替身）与签发导入 + 未确认/缺工具拒绝。
+  ACME 工具探测（真脚本替身）与签发导入 + 未确认/缺工具拒绝、
+  站点归属登记（落盘/幂等/一对一冲突/上限/陈旧证书/解除）、
+  强制 HTTPS 判定（httptest 模拟 80/443：已跳转 / 未跳转 / 443 不可达 /
+  302 到 http 不算跳转 / 不跟随跳转）。
+- 仓根 `methodcaps_test.go`：`method_capabilities` 与 `businessVerb` 双向一致
+  （含 config 契约的漏声明陷阱）；`boundary_test.go`：本仓不写 web 服务器配置、
+  无后台定时器、无插件间直连、外部命令只用于 ACME。
 - `tests/fault/`：四类故障注入（kill / timeout / disk-full / cgroup-limit）
   驱动真实方法，断言错误码、关键词与"不落半成品"，附无故障对照组与真实
   握手超时探测。

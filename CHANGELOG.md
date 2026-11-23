@@ -5,6 +5,80 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-11-23
+
+### Added
+
+- **站点归属登记**：`ssl.bind.set` / `ssl.bind.remove` / `ssl.bind.list`。本仓只登记
+  「证书 → 站点域名」的归属关系（`<证书目录>/bindings.json`，0600，schema=1），
+  不写任何 web 服务器配置。
+  - 一对一约束：一张证书只能属于一个站点、一个站点只能挂一张证书，冲突返回
+    `E_CONFLICT` + hint；同对重复登记幂等（`created=false`，只刷新 note / updated_at）。
+  - 证书必须真实存在（否则 `E_NOTFOUND`）；证书被删除后归属保留但 `cert_exists=false`。
+  - 结果带 `site_bind` 建议载荷（`site.bindSSL` 的 domain / cert_path / key_path /
+    force_https=true），由用户到站点页发起实际绑定。
+- **强制 HTTPS 只读判定**：`ssl.https.status`（domain，端口缺省 80/443）。真实探测
+  「443 能否 TLS 握手」与「80 是否把 `/` 3xx 跳到 https://」，返回
+  `verdict` ∈ `force-https` / `https-without-redirect` / `https-unreachable` +
+  两侧探测事实 + 指向站点侧的建议载荷 + 可操作 hint。
+  - 只读：不跟随跳转（只读第一跳状态码与 Location）、不改配置、不 reload。
+  - 探测失败是观测值（`reachable=false + error`），不映射成协议错误。
+- **方法级能力声明**（`info.json.method_capabilities`，14 条）：只读方法
+  `list` / `verify` / `expiring` / `acme.status` / `bind.list` / `https.status` =
+  `system:read`；写方法 `import` / `selfsign` / `renew` / `issue` / `renew.set` /
+  `acme.issue` / `bind.set` / `bind.remove` = `system:admin`。未声明的方法会回退
+  插件级 `capabilities`（`system:admin`），只读操作会因此进管理审计——这次逐条补齐。
+
+### Changed
+
+- 版本号 0.3.0 → 0.4.0（新增 4 个方法，feat → minor）。
+- `methods.go` 的参数结构与 `parse*` 解析函数原样移到新文件 `params.go`
+  （纯搬移、零语义变化；方法分发表 `handleSSLVerb` 与 `businessVerb` 仍在
+  `methods.go`），为新增 4 个方法留出可读空间。
+- `ssl.bind.set` 的 `probe` 是**可选**参数：不显式给就不发起任何探测（G-10：
+  出站只由用户显式动作触发）；`ssl.bind.list` 永不联网。
+
+### 边界决策（本仓不越权）
+
+- **绑定站点选 (A)：只登记归属 + 给建议载荷，不写配置、不直调 site。**
+  - 被否决 (B)「本仓经内核调用 `site.bindSSL`」：`PLUGIN-PROTOCOL §2` 明确
+    「不做插件间直连，跨插件调用一律经内核 bus 转发并做 capabilities 校验」，
+    插件到内核只有 `kore.event` 单向通道、没有"代我调另一个插件"的接口。
+    从插件侧发起只能靠伪造 HTTP 会话，那是绕过鉴权，绝对不能做。
+  - 被否决 直写 nginx vhost：G-13 仓库边界 + 插件能力边界——写站点配置、管
+    443 监听、管 reload 是 `site` 插件的职责；两个插件各写一份 vhost 必然互相覆盖。
+- **强制 HTTPS 选「只读判定 + 指向站点侧」：** 开启跳转的真开关是
+  `site.bindSSL` 的 `force_https`（默认 true，见 site `info.json` / `render.go`）；
+  `site.setRedirect` 是**精确路径**重定向（`to_url` 只接受 `http(s)://` 或站内路径），
+  不适合当全局强制 HTTPS（会丢原路径），因此 `site_action` 以 `bindSSL` 为主、
+  在 note 里给出 setRedirect 的适用场景。本仓只判定、不改配置、不 reload。
+- **ACME 自动续期保持 G-10 口径：** `ssl.renew.set` 仍只产「待创建任务描述」交内核
+  scheduler，不自己起 ticker；`ssl.acme.issue` 仍需 `confirm=true` 且只调本机
+  certbot/acme.sh（ADR-0020）。本轮**没有**新增任何后台签发 / 后台续期路径，
+  scheduler 侧对 ACME 证书仍由 `ssl.renew` 如实拒绝。
+
+### Security
+
+- `https.status` 的 80 侧探测只发一个 `GET /`、只读响应头（上限 16 KiB），
+  不跟随跳转、不带凭据；443 侧只做握手取元数据（`InsecureSkipVerify`，与
+  `ssl.verify` 同口径，`matched` 只表示证书覆盖主机名）。
+- 归属登记文件 0600、目录 0700，路径经 `withinDir` 二次校验；`note` 限 200 字符
+  且拒绝控制字符。
+
+### Tests
+
+- 新增 `methodcaps_test.go`：`method_capabilities` 与 `businessVerb` **双向**一致，
+  并单独覆盖 config 契约（实现了却没声明 → 回退 admin 审计；声明了却没实现 → 漂移）。
+- 新增 `boundary_test.go`：静态断言本仓 Go 代码**不含 web 服务器配置指令 / 配置目录 /
+  reload 片段**、无 `time.NewTicker` 等周期来源、`net.Dial` 只有 `main.go` 连内核
+  UDS 一处、`exec` 只出现在 ACME 调用点——用测试而不是注释证明"本仓不写 nginx 配置"。
+- 新增 `internal/certs/binding_test.go`：落盘形状 / 权限 / schema、幂等、一对一冲突、
+  上限、证书缺失、陈旧归属、解除口径、`probe` 可选性。
+- 新增 `internal/certs/https_status_test.go`：用 `httptest` 在回环模拟 80/443
+  （已跳转 / 未跳转 / 443 不可达 / 302 到 http / 不跟随跳转 / 端口校验），不连外网。
+- `tests/fault`：四类故障下 `bind.set` / `bind.list` / `https.status` 均被入口拦截，
+  故障路径不落 `bindings.json`，附无故障对照组。
+
 ## [0.3.0] - 2026-11-23
 
 ### Added

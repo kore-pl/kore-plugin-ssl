@@ -1,6 +1,7 @@
 package certs
 
 import (
+	"sync"
 	"time"
 )
 
@@ -25,6 +26,8 @@ type Service struct {
 	verifyTimeout time.Duration
 	now           func() time.Time
 	acmeTools     map[string]string
+	// bindMu 串行化站点归属登记的读改写：同一进程内多请求并发时不丢更新。
+	bindMu sync.Mutex
 }
 
 // NewService 构造服务；空参数得到"默认目录 + 无故障注入"的生产实例。

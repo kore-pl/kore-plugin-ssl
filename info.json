@@ -1,7 +1,7 @@
 {
   "id": "ssl",
   "name": "TLS 证书管理插件",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "protocol": "kore.plugin.v1",
   "lifecycle": "lazy",
   "depth_level": "production",
@@ -9,6 +9,22 @@
   "capabilities": [
     "system:admin"
   ],
+  "method_capabilities": {
+    "ssl.list": "system:read",
+    "ssl.verify": "system:read",
+    "ssl.expiring": "system:read",
+    "ssl.acme.status": "system:read",
+    "ssl.bind.list": "system:read",
+    "ssl.https.status": "system:read",
+    "ssl.import": "system:admin",
+    "ssl.selfsign": "system:admin",
+    "ssl.renew": "system:admin",
+    "ssl.issue": "system:admin",
+    "ssl.renew.set": "system:admin",
+    "ssl.acme.issue": "system:admin",
+    "ssl.bind.set": "system:admin",
+    "ssl.bind.remove": "system:admin"
+  },
   "triggers": [
     "event:cert.renew_due"
   ],
@@ -24,5 +40,5 @@
     "web",
     "sec"
   ],
-  "size_bytes": 2465705
+  "size_bytes": 2495598
 }

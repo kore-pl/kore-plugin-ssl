@@ -55,61 +55,12 @@ func businessVerb(method, id string) (string, bool) {
 	verb := strings.TrimPrefix(method, id+".")
 	switch verb {
 	case "list", "import", "selfsign", "renew", "verify", "issue",
-		"expiring", "renew.set", "acme.status", "acme.issue":
+		"expiring", "renew.set", "acme.status", "acme.issue",
+		"bind.set", "bind.remove", "bind.list", "https.status":
 		return verb, true
 	default:
 		return "", false
 	}
-}
-
-// importParams 是 ssl.import 的入参：证书与私钥必填，链选填。
-type importParams struct {
-	Domain   string `json:"domain"`
-	CertPEM  string `json:"cert_pem"`
-	KeyPEM   string `json:"key_pem"`
-	ChainPEM string `json:"chain_pem"`
-}
-
-// selfSignParams 是 ssl.selfsign 的入参：domain 必填，其余按默认值。
-type selfSignParams struct {
-	Domain    string   `json:"domain"`
-	Days      int      `json:"days"`
-	KeyType   string   `json:"key_type"`
-	ExtraSANs []string `json:"extra_sans"`
-}
-
-// renewParams 是 ssl.renew 的入参：domain 必填，days 为 0 时沿用原有效期跨度；
-// days_before > 0 时只在剩余天数不超过它时才真正重签（定时任务用）。
-type renewParams struct {
-	Domain     string `json:"domain"`
-	Days       int    `json:"days"`
-	DaysBefore int    `json:"days_before"`
-}
-
-// verifyParams 是 ssl.verify 的入参：host 或 host:port。
-type verifyParams struct {
-	Domain string `json:"domain"`
-}
-
-// expiringParams 是 ssl.expiring 的入参：days 是纳入窗口（天），缺省 30。
-type expiringParams struct {
-	Days int `json:"days"`
-}
-
-// renewSetParams 是 ssl.renew.set 的入参：name 为证书主域名，days_before 为提前量。
-type renewSetParams struct {
-	Name       string `json:"name"`
-	DaysBefore int    `json:"days_before"`
-}
-
-// acmeStatusParams 是 ssl.acme.status 的入参（无字段，保留形状校验）。
-type acmeStatusParams struct{}
-
-// acmeIssueParams 是 ssl.acme.issue 的入参：confirm 必须为 true 才联网签发。
-type acmeIssueParams struct {
-	Domain  string `json:"domain"`
-	Email   string `json:"email"`
-	Confirm bool   `json:"confirm"`
 }
 
 // errorDetail 是协议错误 detail 的形状：只承载 hint，内核据此填 HTTP 错误体的 hint 字段。
@@ -227,95 +178,57 @@ func handleSSLVerb(verb string, params json.RawMessage, svc *certs.Service, resp
 		}
 		response.Result = encode(result)
 		return nil
+	case "bind.set":
+		p, perr := parseBindSetParams(params)
+		if perr != nil {
+			return toProtocolError(perr)
+		}
+		var probe *certs.BindingProbeRequest
+		if p.Probe != nil {
+			probe = &certs.BindingProbeRequest{HTTPPort: p.Probe.HTTPPort, HTTPSPort: p.Probe.HTTPSPort}
+		}
+		result, cerr := svc.SetBinding(certs.SetBindingRequest{
+			Cert: p.Cert, Site: p.Site, Note: p.Note, Probe: probe,
+		})
+		if cerr != nil {
+			return toProtocolError(cerr)
+		}
+		response.Result = encode(result)
+		return nil
+	case "bind.remove":
+		p, perr := parseBindRemoveParams(params)
+		if perr != nil {
+			return toProtocolError(perr)
+		}
+		result, cerr := svc.RemoveBinding(certs.RemoveBindingRequest{Cert: p.Cert, Site: p.Site})
+		if cerr != nil {
+			return toProtocolError(cerr)
+		}
+		response.Result = encode(result)
+		return nil
+	case "bind.list":
+		result, cerr := svc.Bindings()
+		if cerr != nil {
+			return toProtocolError(cerr)
+		}
+		response.Result = encode(result)
+		return nil
+	case "https.status":
+		p, perr := parseHTTPSStatusParams(params)
+		if perr != nil {
+			return toProtocolError(perr)
+		}
+		result, cerr := svc.HTTPSStatus(certs.HTTPSStatusRequest{
+			Domain: p.Domain, HTTPPort: p.HTTPPort, HTTPSPort: p.HTTPSPort,
+		})
+		if cerr != nil {
+			return toProtocolError(cerr)
+		}
+		response.Result = encode(result)
+		return nil
 	default:
 		return notFound(verb)
 	}
-}
-
-// parseImportParams 校验 ssl.import 入参形状并反序列化。
-func parseImportParams(raw json.RawMessage) (importParams, *certs.CertError) {
-	var p importParams
-	if perr := unmarshalParams(raw, &p, "ssl.import"); perr != nil {
-		return p, perr
-	}
-	return p, nil
-}
-
-// parseSelfSignParams 校验 ssl.selfsign 入参形状并反序列化。
-func parseSelfSignParams(raw json.RawMessage) (selfSignParams, *certs.CertError) {
-	var p selfSignParams
-	if perr := unmarshalParams(raw, &p, "ssl.selfsign"); perr != nil {
-		return p, perr
-	}
-	return p, nil
-}
-
-// parseRenewParams 校验 ssl.renew 入参形状并反序列化。
-func parseRenewParams(raw json.RawMessage) (renewParams, *certs.CertError) {
-	var p renewParams
-	if perr := unmarshalParams(raw, &p, "ssl.renew"); perr != nil {
-		return p, perr
-	}
-	return p, nil
-}
-
-// parseVerifyParams 校验 ssl.verify 入参形状并反序列化。
-func parseVerifyParams(raw json.RawMessage) (verifyParams, *certs.CertError) {
-	var p verifyParams
-	if perr := unmarshalParams(raw, &p, "ssl.verify"); perr != nil {
-		return p, perr
-	}
-	return p, nil
-}
-
-// parseExpiringParams 校验 ssl.expiring 入参形状并反序列化。
-func parseExpiringParams(raw json.RawMessage) (expiringParams, *certs.CertError) {
-	var p expiringParams
-	if perr := unmarshalParams(raw, &p, "ssl.expiring"); perr != nil {
-		return p, perr
-	}
-	return p, nil
-}
-
-// parseRenewSetParams 校验 ssl.renew.set 入参形状并反序列化。
-func parseRenewSetParams(raw json.RawMessage) (renewSetParams, *certs.CertError) {
-	var p renewSetParams
-	if perr := unmarshalParams(raw, &p, "ssl.renew.set"); perr != nil {
-		return p, perr
-	}
-	return p, nil
-}
-
-// parseACMEStatusParams 校验 ssl.acme.status 入参形状（不接受数组/标量）。
-func parseACMEStatusParams(raw json.RawMessage) (acmeStatusParams, *certs.CertError) {
-	var p acmeStatusParams
-	if perr := unmarshalParams(raw, &p, "ssl.acme.status"); perr != nil {
-		return p, perr
-	}
-	return p, nil
-}
-
-// parseACMEIssueParams 校验 ssl.acme.issue 入参形状并反序列化。
-func parseACMEIssueParams(raw json.RawMessage) (acmeIssueParams, *certs.CertError) {
-	var p acmeIssueParams
-	if perr := unmarshalParams(raw, &p, "ssl.acme.issue"); perr != nil {
-		return p, perr
-	}
-	return p, nil
-}
-
-// unmarshalParams 要求 params 是 JSON 对象（或空/null 交由业务层判必填）。
-func unmarshalParams(raw json.RawMessage, dst any, method string) *certs.CertError {
-	if len(raw) == 0 || string(raw) == "null" {
-		return nil
-	}
-	if raw[0] != '{' {
-		return certsInvalid(method + " params 必须是 JSON 对象")
-	}
-	if err := json.Unmarshal(raw, dst); err != nil {
-		return certsInvalid(method + " params 解析失败: " + err.Error())
-	}
-	return nil
 }
 
 // encode / certsInvalid / notFound / toProtocolError 是协议层错误与结果转换工具。

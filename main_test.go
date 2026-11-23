@@ -22,7 +22,7 @@ import (
 // testConfig 构造握手与会话循环共用的一致配置（不依赖环境变量）。
 func testConfig() config {
 	return config{
-		id: "ssl", version: "0.3.0", requiresKore: ">=0.1.0 <0.2.0",
+		id: "ssl", version: "0.4.0", requiresKore: ">=0.1.0 <0.2.0",
 		capabilities: []string{"system:admin"}, startedAt: time.Now(),
 	}
 }
@@ -96,7 +96,7 @@ func TestHandshake(t *testing.T) {
 	if params.PluginID != "ssl" || params.ID != "ssl" {
 		t.Fatalf("plugin_id/id=%q/%q，期望都是 ssl", params.PluginID, params.ID)
 	}
-	if params.Protocol != pluginapi.Protocol || params.Version != "0.3.0" {
+	if params.Protocol != pluginapi.Protocol || params.Version != testConfig().version {
 		t.Fatalf("protocol/version=%q/%q 不符合 §5", params.Protocol, params.Version)
 	}
 	if params.PID != os.Getpid() {
@@ -134,6 +134,13 @@ func TestDispatchMethods(t *testing.T) {
 		{"renew-set", "ssl.renew.set", json.RawMessage(`{"name":"example.com"}`), true},
 		{"renew-set-unknown", "ssl.renew.set", json.RawMessage(`{"name":"absent.kore.local"}`), false},
 		{"renew-due-window", "ssl.renew", json.RawMessage(`{"domain":"example.com","days_before":1}`), true},
+		{"bind-set", "ssl.bind.set", json.RawMessage(`{"cert":"example.com","site":"www.example.com"}`), true},
+		{"bind-list", "ssl.bind.list", nil, true},
+		{"bind-set-unknown-cert", "ssl.bind.set", json.RawMessage(`{"cert":"absent.kore.local","site":"www.kore.local"}`), false},
+		{"bind-remove", "ssl.bind.remove", json.RawMessage(`{"cert":"example.com"}`), true},
+		{"bind-remove-missing", "ssl.bind.remove", json.RawMessage(`{"cert":"example.com"}`), false},
+		{"https-status-unreachable", "ssl.https.status", json.RawMessage(`{"domain":"127.0.0.1","http_port":1,"https_port":1}`), true},
+		{"https-status-bad-port", "ssl.https.status", json.RawMessage(`{"domain":"example.com","http_port":70000}`), false},
 		{"acme-status", "ssl.acme.status", nil, true},
 		{"acme-issue-needs-confirm", "ssl.acme.issue", json.RawMessage(`{"domain":"example.com","email":"ops@example.com"}`), false},
 		{"issue-unsupported", "ssl.issue", json.RawMessage(`{"domain":"example.com"}`), false},
