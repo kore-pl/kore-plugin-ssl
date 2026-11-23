@@ -209,6 +209,20 @@ type acmeAutoParams struct {
 	Confirm      bool   `json:"confirm"`
 }
 
+// httpsDomainParams 是 ssl.https.enforce / unenforce 的入参。
+type httpsDomainParams struct {
+	Domain string `json:"domain"`
+}
+
+// parseHTTPSDomainParams 校验 ssl.https.enforce / unenforce 入参形状并反序列化。
+func parseHTTPSDomainParams(raw json.RawMessage) (httpsDomainParams, *certs.CertError) {
+	var p httpsDomainParams
+	if perr := unmarshalParams(raw, &p, "ssl.https.enforce"); perr != nil {
+		return p, perr
+	}
+	return p, nil
+}
+
 // parseACMEBuiltinIssueParams 校验 ssl.acme.builtin.issue 入参形状并反序列化。
 func parseACMEBuiltinIssueParams(raw json.RawMessage) (acmeBuiltinIssueParams, *certs.CertError) {
 	var p acmeBuiltinIssueParams

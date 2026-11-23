@@ -5,6 +5,44 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-11-23
+
+### Added
+
+- **强制 HTTPS 下发（期望状态 + 站点侧载荷）**：新增 `ssl.https.enforce` /
+  `ssl.https.unenforce`（均 `system:admin`），入参 `{domain}`。
+  - 选 **(b) 只登记期望状态 + 返回 `apply_hint`**，不写站点配置：写独立 drop-in 片段需要在
+    kore 的 `pkg/pluginapi` 形状表里新增 root_action 形状（ADR-0022），超出本仓写域；
+    且站点配置的唯一归属方是 site 插件（G-13），另写一份片段再自行 reload 会与 site 的
+    站点状态脱节（site 认为 force_https=false，下次 apply 覆盖）——两个写入方各管一半
+    配置正是 0.4.0 已否决的路。`apply_hint` 指向 `site.bindSSL` 的 `force_https`
+    （真正生成 80→443 跳转的开关）或 `force_https:false`（关闭）。
+  - 前置校验：本仓必须有该域名的证书，否则 `E_INVALID` + hint「先到站点页绑证书」
+    （没有证书的站点不可能有 443 server 块）。
+  - 幂等：重复 enforce 返回 `created=false, changed=false`，不产生重复登记；
+    `unenforce` 只删本仓自己的登记（按域名精确匹配），不影响其它域名与站点配置，
+    重复卸载 `removed=false` 且不报错。
+  - 落盘：`<元数据目录>/https-state.json`（0600，schema=1，与 bindings.json 同级、可迁）。
+  - 所有写动作进审计（`https-enforce` / `https-unenforce`）。
+- **`ssl.https.status` 扩展**：新增 `enforced`（本仓登记的期望状态）、
+  `source`（`plugin` / `manual` / `none`）、`redirect_code`（80 侧第一跳状态码）；
+  原有 `verdict` / `force_https` / `https{}` / `http{}` 字段保持不变。
+- 方法级能力声明 20 条（7 read / 13 admin）。
+
+### Not done / Boundary
+
+- 未新增 `root_actions`（因此也不需要改 kore 的形状表）；未写任何 nginx 片段、
+  未自行 reload。
+- 实际跳转仍由 site 插件落地；本仓只在事后用 `ssl.https.status` 复核
+  （`source=manual` 表示"没登记但实测在跳"）。
+
+### Tests
+
+- `internal/certs/https_state_test.go`：无证书拒绝（hint 指向先绑证书）、幂等
+  （created/changed 二次为 false + 状态文件 0600 与内容快照 + apply_hint 形状快照）、
+  卸载只删自己（两域名互不影响、重复卸载幂等）、status 三态
+  （plugin / manual / none + redirect_code 301/200）、写操作进审计。
+
 ## [0.5.1] - 2026-11-23
 
 ### Changed

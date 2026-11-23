@@ -32,6 +32,8 @@ kore 的 TLS 证书管理插件（M5 批 1 · 生产级）：证书扫描解析�
 | `ssl.bind.set` | `{cert, site, note?, probe?:{http_port,https_port}}` | 归属登记（一对一冲突校验）+ 站点侧推荐载荷 `site_bind`；显式给 `probe` 时附带只读 HTTPS 判定 |
 | `ssl.bind.remove` | `{cert?, site?}`（至少一个） | `{removed, binding, hint}`；只解除本仓登记，站点侧需 `site.unbindSSL` |
 | `ssl.bind.list` | 无 | `{bindings:[{cert, site, note, created_at, updated_at, cert_path, key_path, cert_exists}], count}` |
+| `ssl.https.enforce` | `{domain}` | 登记"该域名应强制 HTTPS"的期望状态 + 返回站点侧 `apply_hint`（需先有证书；幂等） |
+| `ssl.https.unenforce` | `{domain}` | 只清除本仓登记（不影响站点配置与其它域名；幂等） |
 | `ssl.https.status` | `{domain, http_port?, https_port?}` | `{https:{reachable,matched,...}, http:{status_code,location,redirects_to_https}, force_https, verdict, site_action, hint}` |
 | `ssl.acme.builtin.issue` | `{domain, alt_names?, email?, ca?, directory_url?, webroot?, key_type?, skip_precheck?, confirm:true}` | 内置 ACME 签发：证书/私钥/链路径 + 有效期 + 链长度（需 confirm） |
 | `ssl.acme.builtin.renew` | `{name?}` | 续期所有到期的 ACME 证书（自动续期开启后才工作）：`{renewed, skipped, failed, certs[]}` |
@@ -139,6 +141,10 @@ kore 仓库 `docs/DECISIONS/0020-acme.md`（ADR-0020）。插件只做两件事�
 - 端口默认 80 / 443，可显式给（联调与测试用）；探测失败是观测值
   （`reachable=false + error`），不映射成协议错误。
 - 显式触发才出站：登记时的 `probe` 是可选参数，`ssl.bind.list` 永不联网。
+- **强制 HTTPS 下发**：`ssl.https.enforce` / `unenforce` 只登记**期望状态**并返回
+  `apply_hint`（`site.bindSSL` 的 `force_https=true/false`）——写站点配置、reload 仍是
+  site 插件的职责（G-13），本仓不写片段、不自行 reload。`ssl.https.status` 用
+  `enforced` / `source`（plugin｜manual｜none）/ `redirect_code` 复核实际效果。
 
 ## 内置 ACME 客户端（0.5.0）
 

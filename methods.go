@@ -57,7 +57,8 @@ func businessVerb(method, id string) (string, bool) {
 	case "list", "import", "selfsign", "renew", "verify", "issue",
 		"expiring", "renew.set", "acme.status", "acme.issue",
 		"bind.set", "bind.remove", "bind.list", "https.status",
-		"acme.builtin.issue", "acme.builtin.renew", "acme.builtin.status", "acme.auto":
+		"acme.builtin.issue", "acme.builtin.renew", "acme.builtin.status", "acme.auto",
+		"https.enforce", "https.unenforce":
 		return verb, true
 	default:
 		return "", false
@@ -209,6 +210,28 @@ func handleSSLVerb(verb string, params json.RawMessage, svc *certs.Service, resp
 		return nil
 	case "bind.list":
 		result, cerr := svc.Bindings()
+		if cerr != nil {
+			return toProtocolError(cerr)
+		}
+		response.Result = encode(result)
+		return nil
+	case "https.enforce":
+		p, perr := parseHTTPSDomainParams(params)
+		if perr != nil {
+			return toProtocolError(perr)
+		}
+		result, cerr := svc.HTTPSEnforce(p.Domain)
+		if cerr != nil {
+			return toProtocolError(cerr)
+		}
+		response.Result = encode(result)
+		return nil
+	case "https.unenforce":
+		p, perr := parseHTTPSDomainParams(params)
+		if perr != nil {
+			return toProtocolError(perr)
+		}
+		result, cerr := svc.HTTPSUnenforce(p.Domain)
 		if cerr != nil {
 			return toProtocolError(cerr)
 		}

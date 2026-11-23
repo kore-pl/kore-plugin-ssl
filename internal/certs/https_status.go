@@ -82,8 +82,14 @@ type HTTPSStatusResult struct {
 	HTTP       HTTPProbe  `json:"http"`
 	ForceHTTPS bool       `json:"force_https"`
 	Verdict    string     `json:"verdict"`
-	SiteAction SiteAction `json:"site_action"`
-	Hint       string     `json:"hint"`
+	// Enforced 是本仓登记的**期望状态**（ssl.https.enforce）。
+	Enforced bool `json:"enforced"`
+	// Source 是强制 HTTPS 的来源：plugin（本仓登记）/ manual（未登记但实测在跳）/ none。
+	Source string `json:"source"`
+	// RedirectCode 是 80 侧第一跳状态码（0 表示不可达或非 3xx）。
+	RedirectCode int        `json:"redirect_code"`
+	SiteAction   SiteAction `json:"site_action"`
+	Hint         string     `json:"hint"`
 }
 
 // HTTPSStatus 对目标做 80 / 443 的真实行为探测，返回只读判定。
@@ -124,6 +130,17 @@ func (s *Service) HTTPSStatus(req HTTPSStatusRequest) (*HTTPSStatusResult, *Cert
 				"控制 80→443；本仓不改配置，只给载荷",
 		},
 	}
+	enforced, registered := s.httpsEnforced(host)
+	result.Enforced = registered && enforced
+	switch {
+	case result.Enforced:
+		result.Source = "plugin"
+	case httpProbe.RedirectsToHTTPS:
+		result.Source = "manual"
+	default:
+		result.Source = "none"
+	}
+	result.RedirectCode = httpProbe.StatusCode
 	result.Hint = hintForVerdict(result)
 	return result, nil
 }

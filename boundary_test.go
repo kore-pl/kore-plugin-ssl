@@ -190,6 +190,7 @@ func TestBindingSuggestionPointsToSitePlugin(t *testing.T) {
 		"internal/certs/binding.go":      {},
 		"internal/certs/https_status.go": {},
 		"internal/certs/acme_issue.go":   {},
+		"internal/certs/https_state.go":  {},
 	}
 	for path := range files {
 		if !isProductionSource(path) {

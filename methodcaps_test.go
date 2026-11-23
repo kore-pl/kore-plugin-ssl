@@ -30,6 +30,8 @@ var expectedMethods = map[string]string{
 	"acme.issue":         "system:admin",
 	"bind.set":           "system:admin",
 	"bind.remove":        "system:admin",
+	"https.enforce":      "system:admin",
+	"https.unenforce":    "system:admin",
 	"acme.builtin.issue": "system:admin",
 	"acme.builtin.renew": "system:admin",
 	"acme.auto":          "system:admin",
