@@ -56,7 +56,8 @@ func businessVerb(method, id string) (string, bool) {
 	switch verb {
 	case "list", "import", "selfsign", "renew", "verify", "issue",
 		"expiring", "renew.set", "acme.status", "acme.issue",
-		"bind.set", "bind.remove", "bind.list", "https.status":
+		"bind.set", "bind.remove", "bind.list", "https.status",
+		"acme.builtin.issue", "acme.builtin.renew", "acme.builtin.status", "acme.auto":
 		return verb, true
 	default:
 		return "", false
@@ -208,6 +209,58 @@ func handleSSLVerb(verb string, params json.RawMessage, svc *certs.Service, resp
 		return nil
 	case "bind.list":
 		result, cerr := svc.Bindings()
+		if cerr != nil {
+			return toProtocolError(cerr)
+		}
+		response.Result = encode(result)
+		return nil
+	case "acme.builtin.issue":
+		p, perr := parseACMEBuiltinIssueParams(params)
+		if perr != nil {
+			return toProtocolError(perr)
+		}
+		result, cerr := svc.ACMEBuiltinIssue(certs.ACMEBuiltinIssueRequest{
+			Domain: p.Domain, AltNames: p.AltNames, Email: p.Email, CA: p.CA,
+			DirectoryURL: p.DirectoryURL, Webroot: p.Webroot, KeyType: p.KeyType,
+			Confirm: p.Confirm, SkipPrecheck: p.SkipPrecheck,
+		})
+		if cerr != nil {
+			return toProtocolError(cerr)
+		}
+		response.Result = encode(result)
+		return nil
+	case "acme.builtin.renew":
+		p, perr := parseACMEBuiltinRenewParams(params)
+		if perr != nil {
+			return toProtocolError(perr)
+		}
+		result, cerr := svc.ACMEBuiltinRenew(certs.ACMEBuiltinRenewRequest{Name: p.Name})
+		if cerr != nil {
+			return toProtocolError(cerr)
+		}
+		response.Result = encode(result)
+		return nil
+	case "acme.builtin.status":
+		if _, perr := parseACMEBuiltinStatusParams(params); perr != nil {
+			return toProtocolError(perr)
+		}
+		result, cerr := svc.ACMEBuiltinStatus()
+		if cerr != nil {
+			return toProtocolError(cerr)
+		}
+		response.Result = encode(result)
+		return nil
+	case "acme.auto":
+		p, perr := parseACMEAutoParams(params)
+		if perr != nil {
+			return toProtocolError(perr)
+		}
+		result, cerr := svc.ACMEAuto(certs.ACMEAutoRequest{
+			Enabled: p.Enabled, DaysBefore: p.DaysBefore, CA: p.CA,
+			DirectoryURL: p.DirectoryURL, Webroot: p.Webroot, Email: p.Email,
+			KeyType: p.KeyType, EABKid: p.EABKid, EABHMACKey: p.EABHMACKey,
+			ClearEAB: p.ClearEAB, Confirm: p.Confirm,
+		})
 		if cerr != nil {
 			return toProtocolError(cerr)
 		}

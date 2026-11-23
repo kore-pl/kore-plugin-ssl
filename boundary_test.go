@@ -183,10 +183,19 @@ func TestBindingSuggestionPointsToSitePlugin(t *testing.T) {
 	if found == 0 {
 		t.Fatal("没有找到 site.bindSSL 推荐载荷：绑定站点必须给出站点侧动作（归属登记 + 建议载荷）")
 	}
-	// 推荐载荷只允许出现在业务层（生成建议），不允许出现在协议分发层被"顺手执行"。
+	// 推荐载荷只允许出现在业务层（生成建议/hint），不允许出现在协议分发层被"顺手执行"。
+	// binding/https_status/acme_issue 都是业务层：前两者构造 site_bind 载荷，
+	// acme_issue 只是在成功提示里指向站点页的绑定方法。
+	suggestionOnlyFiles := map[string]struct{}{
+		"internal/certs/binding.go":      {},
+		"internal/certs/https_status.go": {},
+		"internal/certs/acme_issue.go":   {},
+	}
 	for path := range files {
-		if !isProductionSource(path) || filepath.ToSlash(path) == "internal/certs/binding.go" ||
-			filepath.ToSlash(path) == "internal/certs/https_status.go" {
+		if !isProductionSource(path) {
+			continue
+		}
+		if _, ok := suggestionOnlyFiles[filepath.ToSlash(path)]; ok {
 			continue
 		}
 		body := files[path]

@@ -16,16 +16,22 @@ type Options struct {
 	// （PATH + 固定位置 + 家目录），非 nil 时只认这里显式给出的路径，
 	// 让"装了/没装客户端"两种情形都能确定性测试。
 	ACMETools map[string]string
+	// ACMEPrecheckPort / ACMEPrecheckHost 是内置 ACME 的 HTTP-01 预检覆盖：
+	// 生产留零值（端口 80、域名本身）；分域 DNS 或本地测试替身可显式指定。
+	ACMEPrecheckPort int
+	ACMEPrecheckHost string
 }
 
 // Service 是 ssl 业务方法层：所有状态都在固定证书目录里，进程内不缓存清单，
 // 每次调用都读磁盘，保证 list 看到的就是真实文件状态。
 type Service struct {
-	store         *certStore
-	fault         Fault
-	verifyTimeout time.Duration
-	now           func() time.Time
-	acmeTools     map[string]string
+	store            *certStore
+	fault            Fault
+	verifyTimeout    time.Duration
+	now              func() time.Time
+	acmeTools        map[string]string
+	acmePrecheckPort int
+	acmePrecheckHost string
 	// bindMu 串行化站点归属登记的读改写：同一进程内多请求并发时不丢更新。
 	bindMu sync.Mutex
 }
@@ -37,11 +43,13 @@ func NewService(opts Options) *Service {
 		dir = DirFromEnv()
 	}
 	return &Service{
-		store:         newCertStore(dir),
-		fault:         opts.Fault,
-		verifyTimeout: opts.VerifyTimeout,
-		now:           opts.Now,
-		acmeTools:     opts.ACMETools,
+		store:            newCertStore(dir),
+		fault:            opts.Fault,
+		verifyTimeout:    opts.VerifyTimeout,
+		now:              opts.Now,
+		acmeTools:        opts.ACMETools,
+		acmePrecheckPort: opts.ACMEPrecheckPort,
+		acmePrecheckHost: opts.ACMEPrecheckHost,
 	}
 }
 

@@ -33,6 +33,10 @@ kore 的 TLS 证书管理插件（M5 批 1 · 生产级）：证书扫描解析�
 | `ssl.bind.remove` | `{cert?, site?}`（至少一个） | `{removed, binding, hint}`；只解除本仓登记，站点侧需 `site.unbindSSL` |
 | `ssl.bind.list` | 无 | `{bindings:[{cert, site, note, created_at, updated_at, cert_path, key_path, cert_exists}], count}` |
 | `ssl.https.status` | `{domain, http_port?, https_port?}` | `{https:{reachable,matched,...}, http:{status_code,location,redirects_to_https}, force_https, verdict, site_action, hint}` |
+| `ssl.acme.builtin.issue` | `{domain, alt_names?, email?, ca?, directory_url?, webroot?, key_type?, skip_precheck?, confirm:true}` | 内置 ACME 签发：证书/私钥/链路径 + 有效期 + 链长度（需 confirm） |
+| `ssl.acme.builtin.renew` | `{name?}` | 续期所有到期的 ACME 证书（自动续期开启后才工作）：`{renewed, skipped, failed, certs[]}` |
+| `ssl.acme.builtin.status` | 无 | 只读状态：证书目录/来源、CA、directory、webroot、EAB 是否配置（脱敏）、自动续期、最近审计、CA 预设 |
+| `ssl.acme.auto` | `{enabled?, days_before?, ca?, directory_url?, webroot?, email?, key_type?, eab_kid?, eab_hmac_key?, clear_eab?, confirm:true}` | 保存 ACME 配置 + 自动续期开关；开启时返回联网警告与待创建的内核任务 |
 
 `ssl.list` 条目字段：`domain / domains(SAN+CN) / file / not_before / not_after /
 days_left / issuer / subject / serial / is_ca / key_type / key_bits /
@@ -136,6 +140,44 @@ kore 仓库 `docs/DECISIONS/0020-acme.md`（ADR-0020）。插件只做两件事�
   （`reachable=false + error`），不映射成协议错误。
 - 显式触发才出站：登记时的 `probe` 是可选参数，`ssl.bind.list` 永不联网。
 
+## 内置 ACME 客户端（0.5.0）
+
+不再依赖外部 certbot/acme.sh：`internal/acme` 用标准库实现了 RFC 8555 的最小可用子集——
+ES256 JWS、JWK 指纹、nonce 复用与 badNonce 重试、账号注册/复用、EAB、订单、HTTP-01、
+CSR/finalize、证书链下载。
+
+- **多 CA**：`ca` 取 `letsencrypt-staging`（默认）/ `letsencrypt` / `litessl` / `custom`。
+  LiteSSL 的 directory 是 `https://acme.litessl.com/acme/v2/directory`，**强制 EAB**
+  （在 FreeSSL「证书自动化 → ACME 账户管理」创建账号取 `eab_kid` + `eab_hmac_key`）。
+  `custom` 需要同时给 `directory_url`（只接受 https，仅回环允许 http 用于本地测试）。
+- **HTTP-01**：token 写到 `webroot/.well-known/acme-challenge/<token>`，通知 CA 前先本地
+  预检该 URL；token 无论成败都会删除。DNS-01 / 通配符未实现（会明确拒绝并给 hint）。
+- **自动续期默认关闭**：`ssl.acme.auto {enabled:true, confirm:true}` 显式开启后，内核
+  scheduler 才会按 `0 3 * * *` 调 `ssl.acme.builtin.renew`（插件不起 ticker）。
+  续期顺序：到期判定 → 备份旧证书 → 签发 → 验证（密钥/域名/链完整性/本地 TLS 握手）
+  → 落盘；失败保留旧证书并写审计。
+- **审计**：`<证书目录>/acme/audit.jsonl`（0600）记录每次联网的动作/CA/域名/结果/原因。
+
+### 证书目录结构（零侵入，G-31 / ADR-0023）
+
+目录解析优先级：`KORE_SSL_CERT_DIR` > `<KORE_STATE_DIR>/ssl`（= `<install>/data/ssl`）
+> 可执行文件旁 `data/ssl`。**不再默认写 `/etc/kore/ssl`**；旧安装设
+`KORE_SSL_CERT_DIR=/etc/kore/ssl` 即可继续使用（status 会提示检测到旧目录）。
+
+```
+<证书目录>/                       # <install>/data/ssl
+├── <domain>.crt / .key / .chain.pem   证书（0644）/ 私钥（0600）/ 中间链
+├── <domain>.acme                      归属标记（续期不当自签重签）
+├── backups/                           续期前旧证书备份（保留 5 份）
+├── bindings.json                      站点归属登记（0600）
+└── acme/                              内置 ACME 状态（0700）
+    ├── settings.json (0600)           ca / directory_url / webroot / email / EAB / auto_renew
+    ├── audit.jsonl (0600)             每次联网一条审计，256 KiB 轮转
+    └── accounts/<ca>/account.key(0600) + account.json(0600)   账户私钥与 KID
+```
+
+不写 `/etc/letsencrypt`、不写家目录、不调外部 ACME 客户端；删安装目录即清零。
+
 ## 校验链（ssl.import）
 
 1. `cert_pem` 必须能被 `x509.ParseCertificate` 解析（允许 fullchain，首块为叶子）；
@@ -169,8 +211,10 @@ kore 仓库 `docs/DECISIONS/0020-acme.md`（ADR-0020）。插件只做两件事�
   `ssl.list` 只解析证书公钥信息。
 - 域名白名单：小写字母数字/连字符/点，至少两个标签，拒绝 `..` 与路径分隔符；
   文件名落盘前再经 `withinDir` 二次校验。
-- 不联网：只有 `ssl.verify` 与 `ssl.https.status`（及 `ssl.bind.set` 显式带 `probe`）
-  会出站，全部由用户显式调用触发；没有后台任务、没有隐式上报（G-10）。
+- 不联网：只有 `ssl.verify`、`ssl.https.status`、`ssl.acme.builtin.issue` 与
+  `ssl.acme.builtin.renew`（后者只在自动续期显式开启后由 scheduler 触发）会出站，
+  全部由用户显式动作发起；没有后台轮询、没有隐式上报（G-10）。
+- 内置 ACME 的账户私钥与 EAB hmac key 与证书私钥同级保护（0600），不进返回值/日志/审计。
 - 不写 web 服务器配置：由 `boundary_test.go` 静态断言把关——Go 代码里不得出现
   配置目录 / 配置指令 / reload 命令片段；`net.Dial` 只允许 `main.go` 连内核 UDS；
   `exec` 只允许 ACME 客户端（ADR-0020）；生产代码不得出现 `time.NewTicker` 等周期来源。
@@ -183,7 +227,7 @@ go vet ./...
 go test -timeout 200s ./...     # 单元 + 故障注入 + 真实 E2E（插件二进制 + UDS + TLS）
 make build
 make dist
-tar tzf dist/ssl-0.4.0.tar.gz | head -1   # 必须是 info.json
+tar tzf dist/ssl-0.5.0.tar.gz | head -1   # 必须是 info.json
 ```
 
 `make check` 聚合 gofmt / vet / test。`dist` 采用确定性打包
@@ -199,6 +243,8 @@ tar tzf dist/ssl-0.4.0.tar.gz | head -1   # 必须是 info.json
   指纹去重、ACME 标记、续期分支与 SAN 保留、探测匹配与不匹配、
   到期分级与窗口边界、任务描述（含超长域名截断）、续期前备份与保留份数、
   ACME 工具探测（真脚本替身）与签发导入 + 未确认/缺工具拒绝、
+  内置 ACME（本地 mock CA 全链路、badNonce 重试、challenge/finalize/下载失败、EAB、
+  rate limit、预检、自动续期默认关闭/零联网/到期续期/失败保留旧证书）、
   站点归属登记（落盘/幂等/一对一冲突/上限/陈旧证书/解除）、
   强制 HTTPS 判定（httptest 模拟 80/443：已跳转 / 未跳转 / 443 不可达 /
   302 到 http 不算跳转 / 不跟随跳转）。

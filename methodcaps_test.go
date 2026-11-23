@@ -14,21 +14,25 @@ import (
 // 会话拿到写权限，把读方法标成 admin 则会让只读操作进审计并要管理权。
 var expectedMethods = map[string]string{
 	// 只读：只读磁盘上的证书目录 / 只探测本机客户端 / 只探测 80-443 行为。
-	"list":         "system:read",
-	"verify":       "system:read",
-	"expiring":     "system:read",
-	"acme.status":  "system:read",
-	"bind.list":    "system:read",
-	"https.status": "system:read",
+	"list":                "system:read",
+	"verify":              "system:read",
+	"expiring":            "system:read",
+	"acme.status":         "system:read",
+	"bind.list":           "system:read",
+	"https.status":        "system:read",
+	"acme.builtin.status": "system:read",
 	// 写 / 管理：落盘证书、签发、覆盖续期、调用外部客户端、登记归属。
-	"import":      "system:admin",
-	"selfsign":    "system:admin",
-	"renew":       "system:admin",
-	"issue":       "system:admin",
-	"renew.set":   "system:admin",
-	"acme.issue":  "system:admin",
-	"bind.set":    "system:admin",
-	"bind.remove": "system:admin",
+	"import":             "system:admin",
+	"selfsign":           "system:admin",
+	"renew":              "system:admin",
+	"issue":              "system:admin",
+	"renew.set":          "system:admin",
+	"acme.issue":         "system:admin",
+	"bind.set":           "system:admin",
+	"bind.remove":        "system:admin",
+	"acme.builtin.issue": "system:admin",
+	"acme.builtin.renew": "system:admin",
+	"acme.auto":          "system:admin",
 }
 
 // configContract 是配置面板通用契约（PLUGIN-CONFIG.md）：config.get 只读、config.set 管理。

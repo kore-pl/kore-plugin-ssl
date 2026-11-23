@@ -22,7 +22,7 @@ import (
 // testConfig 构造握手与会话循环共用的一致配置（不依赖环境变量）。
 func testConfig() config {
 	return config{
-		id: "ssl", version: "0.4.0", requiresKore: ">=0.1.0 <0.2.0",
+		id: "ssl", version: "0.5.0", requiresKore: ">=0.1.0 <0.2.0",
 		capabilities: []string{"system:admin"}, startedAt: time.Now(),
 	}
 }

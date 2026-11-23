@@ -173,6 +173,78 @@ type httpsStatusParams struct {
 	HTTPSPort int    `json:"https_port"`
 }
 
+// acmeBuiltinIssueParams 是 ssl.acme.builtin.issue 的入参（ca/webroot/email 可覆盖已存配置）。
+type acmeBuiltinIssueParams struct {
+	Domain       string   `json:"domain"`
+	AltNames     []string `json:"alt_names"`
+	Email        string   `json:"email"`
+	CA           string   `json:"ca"`
+	DirectoryURL string   `json:"directory_url"`
+	Webroot      string   `json:"webroot"`
+	KeyType      string   `json:"key_type"`
+	Confirm      bool     `json:"confirm"`
+	SkipPrecheck bool     `json:"skip_precheck"`
+}
+
+// acmeBuiltinRenewParams 是 ssl.acme.builtin.renew 的入参：name 可选，缺省续全部。
+type acmeBuiltinRenewParams struct {
+	Name string `json:"name"`
+}
+
+// acmeBuiltinStatusParams 是 ssl.acme.builtin.status 的入参（无字段，保留形状校验）。
+type acmeBuiltinStatusParams struct{}
+
+// acmeAutoParams 是 ssl.acme.auto 的入参：配置 + 自动续期开关，必须 confirm=true。
+type acmeAutoParams struct {
+	Enabled      *bool  `json:"enabled"`
+	DaysBefore   int    `json:"days_before"`
+	CA           string `json:"ca"`
+	DirectoryURL string `json:"directory_url"`
+	Webroot      string `json:"webroot"`
+	Email        string `json:"email"`
+	KeyType      string `json:"key_type"`
+	EABKid       string `json:"eab_kid"`
+	EABHMACKey   string `json:"eab_hmac_key"`
+	ClearEAB     bool   `json:"clear_eab"`
+	Confirm      bool   `json:"confirm"`
+}
+
+// parseACMEBuiltinIssueParams 校验 ssl.acme.builtin.issue 入参形状并反序列化。
+func parseACMEBuiltinIssueParams(raw json.RawMessage) (acmeBuiltinIssueParams, *certs.CertError) {
+	var p acmeBuiltinIssueParams
+	if perr := unmarshalParams(raw, &p, "ssl.acme.builtin.issue"); perr != nil {
+		return p, perr
+	}
+	return p, nil
+}
+
+// parseACMEBuiltinRenewParams 校验 ssl.acme.builtin.renew 入参形状并反序列化。
+func parseACMEBuiltinRenewParams(raw json.RawMessage) (acmeBuiltinRenewParams, *certs.CertError) {
+	var p acmeBuiltinRenewParams
+	if perr := unmarshalParams(raw, &p, "ssl.acme.builtin.renew"); perr != nil {
+		return p, perr
+	}
+	return p, nil
+}
+
+// parseACMEBuiltinStatusParams 校验 ssl.acme.builtin.status 入参形状（不接受数组/标量）。
+func parseACMEBuiltinStatusParams(raw json.RawMessage) (acmeBuiltinStatusParams, *certs.CertError) {
+	var p acmeBuiltinStatusParams
+	if perr := unmarshalParams(raw, &p, "ssl.acme.builtin.status"); perr != nil {
+		return p, perr
+	}
+	return p, nil
+}
+
+// parseACMEAutoParams 校验 ssl.acme.auto 入参形状并反序列化。
+func parseACMEAutoParams(raw json.RawMessage) (acmeAutoParams, *certs.CertError) {
+	var p acmeAutoParams
+	if perr := unmarshalParams(raw, &p, "ssl.acme.auto"); perr != nil {
+		return p, perr
+	}
+	return p, nil
+}
+
 // parseBindSetParams 校验 ssl.bind.set 入参形状并反序列化。
 func parseBindSetParams(raw json.RawMessage) (bindSetParams, *certs.CertError) {
 	var p bindSetParams

@@ -5,6 +5,73 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-11-23
+
+### Added
+
+- **内置 ACME 客户端（RFC 8555 最小可用子集，零第三方依赖）**：`internal/acme` 只用标准库
+  实现 ES256 JWS、JWK 指纹、nonce 管理（newNonce + Replay-Nonce 复用 + badNonce 换新重试）、
+  账号复用/注册（`onlyReturnExisting` → 创建）、EAB（HS256）、订单 → HTTP-01 → CSR →
+  finalize → 下载证书链全流程。
+- **多 CA**：内置预设 `letsencrypt-staging`（默认，避免生产 rate limit）/ `letsencrypt` /
+  `litessl` / `custom`。LiteSSL 的 directory 为 `https://acme.litessl.com/acme/v2/directory`
+  （来源：lego 官方 CA 清单，并于 2026-11-23 直接请求验证返回 RFC 8555 directory，
+  `meta.externalAccountRequired=true` → 必须 EAB）。
+- **新方法**：`ssl.acme.builtin.issue`（显式签发，需 confirm）、`ssl.acme.builtin.renew`
+  （scheduler 入口，自动续期开启后才工作）、`ssl.acme.builtin.status`（只读状态，零网络，
+  输出脱敏）、`ssl.acme.auto`（配置 + 自动续期开关，需 confirm）。方法级能力声明同步到
+  18 条（7 read / 11 admin）。
+- **HTTP-01**：token 写进用户配置的 webroot（`<webroot>/.well-known/acme-challenge/<token>`，
+  一次性使用、无论成败都清理）；通知 CA 前先本地预检 token URL，把"域名不可达 / 80 未监听 /
+  webroot 配错"暴露成可操作错误，而不是等 CA 回笼统的 unauthorized。
+- **自动续期默认关闭**：`auto_renew=false` 出厂值；只有 `ssl.acme.auto {enabled:true,
+  confirm:true}` 显式开启后，内核 scheduler 才允许调用 `ssl.acme.builtin.renew`（本仓不起
+  ticker，G-19）。开启时返回"每天会联网一次"的明确警告 + 待创建任务描述。
+- **续期护栏**：到期判定（`days_before`）→ 备份旧证书 → 签发 → 验证（密钥匹配、域名覆盖、
+  链逐级签名关联、真实本地 TLS 握手自检）→ 落盘 + `.acme` 标记；任一步失败**保留旧证书**，
+  并在 `acme/audit.jsonl` 记失败原因。
+- **审计**：每次联网写 `acme/audit.jsonl`（0600）：时间 / 动作（issue/renew/auto-enable/
+  auto-disable/config）/ CA / directory / 域名 / 结果 / 原因；超 256 KiB 轮转为 `.1`。
+- **零侵入路径**（G-31 / ADR-0023）：证书目录解析改为
+  `KORE_SSL_CERT_DIR` > `<KORE_STATE_DIR>/ssl`（即 `<install>/data/ssl`）> 可执行文件旁
+  `data/ssl`；**不再默认写 `/etc/kore/ssl`**（旧安装显式设 `KORE_SSL_CERT_DIR=/etc/kore/ssl`
+  即可继续使用，status 会提示检测到旧目录）。ACME 账户密钥、设置、审计全部在
+  `<证书目录>/acme/`（0700/0600），删安装目录即清零。
+
+### Changed
+
+- 版本 0.4.0 → 0.5.0（内置 ACME 客户端 + 4 个新方法，feat → minor）。
+- 证书目录默认值从 `/etc/kore/ssl` 改为 `<KORE_STATE_DIR>/ssl`（零侵入）。
+- `main_test.go` 握手版本断言改为跟随 `testConfig().version`，不再硬编码。
+
+### Security
+
+- 联网只发生在用户显式调用（`acme.builtin.issue` / `acme.auto` 开启后的 scheduler 调用），
+  没有后台轮询；自动续期关闭时 `acme.builtin.renew` 直接 `E_UNSUPPORTED` 且**零网络请求**。
+- 账户私钥 / EAB hmac key 绝不进返回值、日志或审计；`status` 只回 `eab_configured` 布尔。
+- 不写 `/etc/letsencrypt`、不调外部 certbot/acme.sh；token 文件用完即删。
+- 落盘前验证新证书：密钥匹配 + 域名覆盖 + 链完整性 + 本地 TLS 握手，失败不覆盖旧证书。
+
+### Boundaries（未做 / 未验证）
+
+- **只支持 HTTP-01**：DNS-01、通配符证书、ARI（RFC 9773）未实现；通配符续期会明确拒绝。
+- **真实 CA 未验证**：本机无公网可解析域名与 80 端口，内置客户端的端到端只有本地
+  mock ACME CA 的证据（`internal/acme/acmetest`）。staging/生产/LiteSSL 的真机签发
+  仍需在有域名与 80 端口的环境补验。
+- **站点绑定仍归 site 插件**：本仓只产证书 + `.acme` 标记，写 vhost 由 `site.bindSSL` 完成。
+
+### Tests
+
+- `internal/acme`：JWK 指纹向量（独立实现算出）、ES256 r||s 长度与自校验、EAB HMAC 向量、
+  CSR SAN、域名归一化；本地 mock ACME CA 上的完整签发、badNonce 重试、challenge 失败、
+  finalize 被拒、证书下载失败、rateLimited、EAB 缺失/正确/错误、预检成功与失败（回环）、
+  webroot 缺失时零联网。
+- `internal/certs`：自动续期默认关闭且零联网、confirm 必填、开启需 webroot、LiteSSL 强制
+  EAB、status 脱敏、签发落盘/标记/来源/审计、签发失败不落证书、未到期跳过零联网、
+  到期续期（含备份）、续期失败保持旧证书字节不变。
+- 静态门禁 `boundary_test.go` 继续覆盖：无后台定时器、net.Dial 唯一、exec 仅 ACME、
+  不写站点配置指令。
+
 ## [0.4.0] - 2026-11-23
 
 ### Added

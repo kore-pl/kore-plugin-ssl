@@ -23,8 +23,11 @@ import (
 const (
 	// DirEnv 是证书根目录的环境变量名。
 	DirEnv = "KORE_SSL_CERT_DIR"
-	// DefaultDir 是未配置时的默认证书目录。
-	DefaultDir = "/etc/kore/ssl"
+	// LegacyDir 是 0.4.0 及以前的默认证书目录。零侵入规范（G-31）后不再默认写入：
+	// 旧安装需显式 KORE_SSL_CERT_DIR=/etc/kore/ssl 继续使用；新装一律落在 <install>/data/ssl。
+	LegacyDir = "/etc/kore/ssl"
+	// DefaultDir 保留为 LegacyDir 的别名，仅兼容旧引用；实际默认值由 ResolveCertDir 决定。
+	DefaultDir = LegacyDir
 	// certSuffix 是证书文件后缀；selfsign/import 写这个后缀。
 	certSuffix = ".crt"
 	// pemSuffix 是外部导入证书可能使用的后缀，list 同样扫描。
@@ -215,6 +218,7 @@ const (
 	codeUpstream    = pluginapi.E_UPSTREAM
 	codeInternal    = pluginapi.E_INTERNAL
 	codeUnsupported = pluginapi.E_UNSUPPORTED
+	codeRatelimit   = pluginapi.E_RATELIMIT
 )
 
 // invalidParam / internalErr / notFoundErr / unsupportedErr 是常用错误构造器。

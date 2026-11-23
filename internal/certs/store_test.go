@@ -2,6 +2,7 @@ package certs
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -92,17 +93,30 @@ func TestImportOverwritesExistingPEMFileName(t *testing.T) {
 	}
 }
 
-// TestDirFromEnv 校验目录解析：环境变量优先，空值回退默认目录。
+// TestDirFromEnv 校验零侵入的目录解析优先级：
+// KORE_SSL_CERT_DIR > <KORE_STATE_DIR>/ssl > 可执行文件旁 data/ssl（不再默认 /etc/kore/ssl）。
 func TestDirFromEnv(t *testing.T) {
 	t.Setenv(DirEnv, "")
-	if got := DirFromEnv(); got != DefaultDir {
-		t.Fatalf("默认目录=%q，期望 %q", got, DefaultDir)
+	t.Setenv(kernelStateEnv, "")
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("取可执行文件路径失败: %v", err)
 	}
-	t.Setenv(DirEnv, "/tmp/kore-ssl-custom")
-	if got := DirFromEnv(); got != "/tmp/kore-ssl-custom" {
-		t.Fatalf("环境变量目录=%q", got)
+	wantPortable := filepath.Clean(filepath.Join(filepath.Dir(exe), "..", portableDataSubdir))
+	if got := DirFromEnv(); got != wantPortable {
+		t.Fatalf("无环境变量时应回退可执行文件旁 %q，实际 %q", wantPortable, got)
 	}
 	if strings.HasSuffix(DirFromEnv(), "/") {
 		t.Fatal("目录不应带尾斜杠")
+	}
+
+	t.Setenv(kernelStateEnv, "/install/data")
+	if got, source := ResolveCertDir(); got != "/install/data/ssl" || source != DirSourceKernelState {
+		t.Fatalf("state 目录解析=(%q,%q)，期望 (/install/data/ssl,kernel-state)", got, source)
+	}
+
+	t.Setenv(DirEnv, "/tmp/kore-ssl-custom")
+	if got, source := ResolveCertDir(); got != "/tmp/kore-ssl-custom" || source != DirSourceEnv {
+		t.Fatalf("环境变量目录=(%q,%q)，期望 (/tmp/kore-ssl-custom,env)", got, source)
 	}
 }

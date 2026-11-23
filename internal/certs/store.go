@@ -10,13 +10,11 @@ import (
 	"time"
 )
 
-// DirFromEnv 返回证书根目录：KORE_SSL_CERT_DIR 覆盖，未配置时用 /etc/kore/ssl。
-// 目录只来自运维环境变量，不接受任何 RPC 入参指定路径。
+// DirFromEnv 返回证书根目录：KORE_SSL_CERT_DIR > <KORE_STATE_DIR>/ssl > 可执行文件旁 data/ssl。
+// 目录只来自环境变量/安装位置，不接受任何 RPC 入参指定路径（G-31 零侵入）。
 func DirFromEnv() string {
-	if dir := strings.TrimSpace(os.Getenv(DirEnv)); dir != "" {
-		return dir
-	}
-	return DefaultDir
+	dir, _ := ResolveCertDir()
+	return dir
 }
 
 // certStore 封装固定证书目录下的文件命名、原子写入与扫描。
@@ -28,7 +26,7 @@ type certStore struct {
 // newCertStore 构造 store；空目录回退默认目录。
 func newCertStore(dir string) *certStore {
 	if strings.TrimSpace(dir) == "" {
-		dir = DefaultDir
+		dir = DirFromEnv()
 	}
 	return &certStore{dir: dir}
 }
