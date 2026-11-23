@@ -244,7 +244,7 @@ go vet ./...
 go test -timeout 200s ./...     # 单元 + 故障注入 + 真实 E2E（插件二进制 + UDS + TLS）
 make build
 make dist
-tar tzf dist/ssl-0.5.0.tar.gz | head -1   # 必须是 info.json
+tar tzf dist/ssl-0.6.0.tar.gz | head -1   # 必须是 info.json
 ```
 
 `make check` 聚合 gofmt / vet / test。`dist` 采用确定性打包
@@ -293,7 +293,7 @@ tar tzf dist/ssl-0.5.0.tar.gz | head -1   # 必须是 info.json
 - **行为准则**：[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。
 - **兼容性**：`protocol: kore.plugin.v1` · `requires_kore: >=0.1.0 <0.2.0` · `lifecycle: lazy` · 深度等级 `production`。
 - **验证方式**：本地 `make check` 优先（CI 只在 push main / tag / PR / 手动跑；发布前 `make dist` 连跑两次核对 sha 一致）。
-- **发布产物**：`make dist` → `dist/ssl-0.5.0.tar.gz` + `.sha256`（位级可复现，连跑两次 sha 相同）。
+- **发布产物**：`make dist` → `dist/ssl-0.6.0.tar.gz` + `.sha256`（位级可复现，连跑两次 sha 相同）。
 - **相关仓库**：[索引 kore-plugins](https://github.com/kore-pl/kore-plugins) · [协议文档](https://github.com/kore-pl/kore/blob/main/docs/PLUGIN-PROTOCOL.md) · [SDK 指南](https://github.com/kore-pl/kore/blob/main/docs/PLUGIN-SDK.md)
 
 <!-- oss:end -->
