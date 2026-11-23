@@ -96,8 +96,8 @@ type acmeAuditEntry struct {
 	Reason    string `json:"reason,omitempty"`
 }
 
-// acmeDir 返回 <证书目录>/acme。
-func (s *certStore) acmeDir() string { return filepath.Join(s.dir, acmeDirName) }
+// acmeDir 返回 <元数据目录>/acme（设置/审计/账户密钥，无 web server 读取需求 → 可迁）。
+func (s *certStore) acmeDir() string { return filepath.Join(s.metaDir, acmeDirName) }
 
 // acmeSettingsPath 返回设置文件路径。
 func (s *certStore) acmeSettingsPath() string {
@@ -157,7 +157,7 @@ func (s *Service) saveACMESettings(settings acmeSettings) *CertError {
 		return internalErr("创建 ACME 状态目录失败: " + err.Error())
 	}
 	path := s.store.acmeSettingsPath()
-	if err := s.store.withinDir(path); err != nil {
+	if err := s.store.withinWritable(path); err != nil {
 		return internalErr("ACME 设置路径越界: " + err.Error())
 	}
 	settings.Schema = acmeSettingsSchema

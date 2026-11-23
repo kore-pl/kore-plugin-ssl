@@ -5,6 +5,35 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-11-23
+
+### Changed
+
+- **存储分层（ADR-0023 阶段 C）**：证书目录与插件元数据目录拆开。
+  - 可迁项默认落在 `$KORE_PLUGIN_DATA/ssl`（0700，属主 kore-<id>）：`backups/`、
+    `bindings.json`、`acme/`（settings / audit / 账户密钥）——这些没有 web server 读取需求。
+  - 证书/私钥/链仍留在证书目录（系统路径）：web server（nginx 以 www-data/root 运行）必须读取，
+    属 ADR-0023 §3.5 豁免 #3「用户批准的宿主变更」，**不迁**。
+  - 未注入 `KORE_PLUGIN_DATA` 时元数据回退证书目录（与 0.5.0 完全兼容；旧部署零迁移成本）。
+  - `Options.MetaDir` 可显式覆盖（测试与高级配置）。
+- `ssl.list` 与 `ssl.acme.builtin.status` 新增 `storage` 字段：`portable`（元数据是否在
+  `$KORE_PLUGIN_DATA` 下）、`portable_root`、`install_dir`、`cert_dir`、`meta_dir`、
+  `system_paths[]`（每条含路径、种类、是否在安装目录内、**为什么必须在外**）与 `hint`。
+
+### Security / Boundary
+
+- 未放宽任何文件权限：证书仍按 0644、私钥 0600，目录 0700/0755 维持原样。
+  **候选方案（未实施，待 lead 裁决）**：证书 0640 + 共享组（www-data）可让插件与 web server
+  共用安装目录内的证书；但这是权限放宽，属于安全决策，本轮不做。
+
+### Tests
+
+- `TestResolveMetaDir`：无/有 `KORE_PLUGIN_DATA` 的默认根解析 + `Options.MetaDir` 显式优先。
+- `TestMetaFilesStayPortable`：证书落证书目录、`bindings.json` 与 `acme/settings.json` 落元数据目录。
+- `TestStorageInfoPortableAndSystemPaths` / `TestStorageInfoLegacyFallback`：storage 标注
+  （portable、meta_dir、system_paths 含证书目录且理由写明 web server 读取 + ADR 豁免）。
+- `TestStorageExposedInListAndStatus`：list 与 status 的 storage 一致且非空。
+
 ## [0.5.0] - 2026-11-23
 
 ### Added

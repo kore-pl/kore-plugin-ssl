@@ -8,7 +8,10 @@ import (
 // Options 是服务构造参数。Dir 为空时回退 KORE_SSL_CERT_DIR / 默认目录；
 // Fault 只由运行期 KORE_FAULT 注入；VerifyTimeout/Now 供测试替换，生产留零值。
 type Options struct {
-	Dir           string
+	Dir string
+	// MetaDir 覆盖插件元数据目录（backups/bindings/acme）；空则按 $KORE_PLUGIN_DATA/ssl
+	// 解析，未注入时回退 Dir（与阶段 C 之前行为一致）。
+	MetaDir       string
 	Fault         Fault
 	VerifyTimeout time.Duration
 	Now           func() time.Time
@@ -43,7 +46,7 @@ func NewService(opts Options) *Service {
 		dir = DirFromEnv()
 	}
 	return &Service{
-		store:            newCertStore(dir),
+		store:            newCertStoreWithMeta(dir, opts.MetaDir),
 		fault:            opts.Fault,
 		verifyTimeout:    opts.VerifyTimeout,
 		now:              opts.Now,
@@ -63,5 +66,5 @@ func (s *Service) List() (*ListResult, *CertError) {
 	if err != nil {
 		return nil, internalErr("扫描证书目录失败: " + err.Error())
 	}
-	return &ListResult{Certs: infos, Count: len(infos)}, nil
+	return &ListResult{Certs: infos, Count: len(infos), Storage: s.storageInfo()}, nil
 }

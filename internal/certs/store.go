@@ -17,18 +17,31 @@ func DirFromEnv() string {
 	return dir
 }
 
-// certStore 封装固定证书目录下的文件命名、原子写入与扫描。
+// certStore 封装证书目录与元数据目录的文件命名、原子写入与扫描。
+//
+// dir 是证书目录（证书/私钥/链/.acme 标记，web server 要读，属系统路径）；
+// metaDir 是插件元数据目录（backups/、bindings.json、acme/），默认 $KORE_PLUGIN_DATA/ssl，
+// 未注入时回退 dir（阶段 C 之前的完全兼容行为）。
 // 所有写操作遵循：同目录临时文件 → fsync → rename；失败按快照恢复原状态。
 type certStore struct {
-	dir string
+	dir     string
+	metaDir string
 }
 
-// newCertStore 构造 store；空目录回退默认目录。
+// newCertStore 构造 store；空目录回退默认目录，元数据目录按 $KORE_PLUGIN_DATA 解析。
 func newCertStore(dir string) *certStore {
+	return newCertStoreWithMeta(dir, "")
+}
+
+// newCertStoreWithMeta 构造 store 并显式指定元数据目录（空则按环境解析）。
+func newCertStoreWithMeta(dir, metaDir string) *certStore {
 	if strings.TrimSpace(dir) == "" {
 		dir = DirFromEnv()
 	}
-	return &certStore{dir: dir}
+	if strings.TrimSpace(metaDir) == "" {
+		metaDir = ResolveMetaDir(dir)
+	}
+	return &certStore{dir: dir, metaDir: metaDir}
 }
 
 // backupDirName 是续期前旧证书的备份子目录名。
@@ -56,7 +69,25 @@ func (s *certStore) ensureDir() error {
 
 // withinDir 确认路径落在证书目录内（双保险：即使 base 被污染也无法写出目录）。
 func (s *certStore) withinDir(path string) error {
-	dirAbs, err := filepath.Abs(s.dir)
+	return withinBase(s.dir, path)
+}
+
+// withinWritable 确认路径落在证书目录或元数据目录内（元数据在阶段 C 后迁到 $KORE_PLUGIN_DATA）。
+func (s *certStore) withinWritable(path string) error {
+	if err := s.withinDir(path); err == nil {
+		return nil
+	}
+	if s.metaDir != "" {
+		if err := withinBase(s.metaDir, path); err == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("路径 %s 既不在证书目录也不在元数据目录内", path)
+}
+
+// withinBase 判断 path 是否在 base 目录内。
+func withinBase(base, path string) error {
+	dirAbs, err := filepath.Abs(base)
 	if err != nil {
 		return err
 	}
@@ -66,7 +97,7 @@ func (s *certStore) withinDir(path string) error {
 	}
 	rel, err := filepath.Rel(dirAbs, pathAbs)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("路径 %s 不在证书目录内", path)
+		return fmt.Errorf("路径 %s 不在 %s 内", path, base)
 	}
 	return nil
 }
@@ -322,7 +353,7 @@ func (s *certStore) backupPair(certFileName string, now time.Time) (string, erro
 	if err != nil {
 		return "", fmt.Errorf("读取待备份证书 %s: %w", certPath, err)
 	}
-	backupDir := filepath.Join(s.dir, backupDirName)
+	backupDir := filepath.Join(s.metaDir, backupDirName)
 	if err := os.MkdirAll(backupDir, dirMode); err != nil {
 		return "", fmt.Errorf("创建备份目录 %s: %w", backupDir, err)
 	}

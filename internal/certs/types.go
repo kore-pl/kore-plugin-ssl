@@ -82,9 +82,11 @@ type CertInfo struct {
 }
 
 // ListResult 是 ssl.list 的结构化结果。
+// Storage 显式标注存储分布：哪些元数据已 portable、哪些证书路径必须在系统路径（ADR-0023）。
 type ListResult struct {
-	Certs []CertInfo `json:"certs"`
-	Count int        `json:"count"`
+	Certs   []CertInfo  `json:"certs"`
+	Count   int         `json:"count"`
+	Storage StorageInfo `json:"storage"`
 }
 
 // ImportRequest 是 ssl.import 的入参：证书与私钥必填，链选填。

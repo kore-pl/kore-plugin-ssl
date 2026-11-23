@@ -1,7 +1,7 @@
 {
   "id": "ssl",
   "name": "TLS 证书管理插件",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "protocol": "kore.plugin.v1",
   "lifecycle": "lazy",
   "depth_level": "production",
@@ -44,5 +44,5 @@
     "web",
     "sec"
   ],
-  "size_bytes": 3159663
+  "size_bytes": 3160949
 }

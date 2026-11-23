@@ -135,9 +135,9 @@ const (
 	bindingListHint   = "site.bindSSL 的 cert_path / key_path 直接取本条的这两个字段；实际绑定请在站点页操作"
 )
 
-// bindingsPath 返回登记文件路径（固定落在证书目录内）。
+// bindingsPath 返回登记文件路径（落在元数据目录：$KORE_PLUGIN_DATA/ssl 或旧证书目录）。
 func (s *certStore) bindingsPath() string {
-	return filepath.Join(s.dir, bindingsFileName)
+	return filepath.Join(s.metaDir, bindingsFileName)
 }
 
 // loadBindings 读取登记文件；文件不存在等价于空登记（首次绑定不报错）。
@@ -172,7 +172,7 @@ func (s *certStore) saveBindings(file bindingFile) error {
 		return err
 	}
 	path := s.bindingsPath()
-	if err := s.withinDir(path); err != nil {
+	if err := s.withinWritable(path); err != nil {
 		return err
 	}
 	file.Schema = bindingsSchema

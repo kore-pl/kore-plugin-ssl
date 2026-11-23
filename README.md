@@ -160,17 +160,28 @@ CSR/finalize、证书链下载。
 
 ### 证书目录结构（零侵入，G-31 / ADR-0023）
 
-目录解析优先级：`KORE_SSL_CERT_DIR` > `<KORE_STATE_DIR>/ssl`（= `<install>/data/ssl`）
-> 可执行文件旁 `data/ssl`。**不再默认写 `/etc/kore/ssl`**；旧安装设
+目录分两层（ADR-0023 阶段 C）：
+
+- **证书目录**（web server 要读）：`KORE_SSL_CERT_DIR` > `<KORE_STATE_DIR>/ssl`
+  > 可执行文件旁 `data/ssl`。**不迁入 0700 插件私有目录**——nginx 以 www-data/root 运行，
+  读不到就等于站点挂掉；属 ADR-0023 §3.5 豁免 #3 用户批准的宿主变更。
+- **元数据目录**（插件自有，可迁）：`$KORE_PLUGIN_DATA/ssl`（内核注入，0700）；
+  未注入时回退证书目录（旧部署零迁移）。`Options.MetaDir` 可显式覆盖。
+
+`ssl.list` / `ssl.acme.builtin.status` 的 `storage` 字段会显式标注：
+`portable`、`portable_root`、`cert_dir`、`meta_dir`、`system_paths[]`（每条带
+"为什么必须在外"）与 `hint`。**不再默认写 `/etc/kore/ssl`**；旧安装设
 `KORE_SSL_CERT_DIR=/etc/kore/ssl` 即可继续使用（status 会提示检测到旧目录）。
 
 ```
-<证书目录>/                       # <install>/data/ssl
-├── <domain>.crt / .key / .chain.pem   证书（0644）/ 私钥（0600）/ 中间链
-├── <domain>.acme                      归属标记（续期不当自签重签）
+<证书目录>/  = KORE_SSL_CERT_DIR（web server 读取，系统路径）
+├── <domain>.crt (0644) / .key (0600) / .chain.pem
+└── <domain>.acme                      归属标记（续期不当自签重签）
+
+<元数据目录>/ = $KORE_PLUGIN_DATA/ssl（0700，可迁；未注入时回退证书目录）
 ├── backups/                           续期前旧证书备份（保留 5 份）
-├── bindings.json                      站点归属登记（0600）
-└── acme/                              内置 ACME 状态（0700）
+├── bindings.json (0600)               站点归属登记
+└── acme/ (0700)
     ├── settings.json (0600)           ca / directory_url / webroot / email / EAB / auto_renew
     ├── audit.jsonl (0600)             每次联网一条审计，256 KiB 轮转
     └── accounts/<ca>/account.key(0600) + account.json(0600)   账户私钥与 KID

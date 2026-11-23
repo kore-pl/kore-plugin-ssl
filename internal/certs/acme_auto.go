@@ -33,6 +33,7 @@ type ACMEBuiltinStatus struct {
 	AccountExists  bool                 `json:"account_exists"`
 	AccountKID     string               `json:"account_kid,omitempty"`
 	Presets        []acmeproto.CAPreset `json:"presets"`
+	Storage        StorageInfo          `json:"storage"`
 	LastAudit      []acmeAuditEntry     `json:"last_audit"`
 	LegacyDirSeen  bool                 `json:"legacy_dir_seen"`
 	Hint           string               `json:"hint"`
@@ -67,6 +68,7 @@ func (s *Service) ACMEBuiltinStatus() (*ACMEBuiltinStatus, *CertError) {
 		AutoRenew:      settings.AutoRenew,
 		DaysBefore:     settings.DaysBefore,
 		Presets:        acmeproto.Presets(),
+		Storage:        s.storageInfo(),
 		LastAudit:      s.acmeAuditTail(acmeAuditTailMax),
 		LegacyDirSeen:  legacyCertDirHasCerts(),
 	}
