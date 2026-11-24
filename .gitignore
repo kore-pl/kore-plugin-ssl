@@ -2,3 +2,6 @@
 /bin/
 /dist/
 go.work.sum
+
+# 发版复核证据：本地保留、不入库（保持 HEAD==tag）
+RELEASE-EVIDENCE.md
