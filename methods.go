@@ -126,7 +126,11 @@ func handleSSLVerb(verb string, params json.RawMessage, svc *certs.Service, resp
 		if perr != nil {
 			return toProtocolError(perr)
 		}
-		result, cerr := svc.ACMEIssue(certs.ACMEIssueRequest{Domain: p.Domain, Email: p.Email, Confirm: p.Confirm})
+		result, cerr := svc.ACMEIssueQuick(certs.QuickIssueRequest{
+			Domain: p.Domain, Site: p.Site, AltNames: p.AltNames, Webroot: p.Webroot,
+			Email: p.Email, CA: p.CA, DirectoryURL: p.DirectoryURL, KeyType: p.KeyType,
+			Engine: p.Engine, Confirm: p.Confirm, SkipPrecheck: p.SkipPrecheck,
+		})
 		if cerr != nil {
 			return toProtocolError(cerr)
 		}
@@ -280,7 +284,7 @@ func handleSSLVerb(verb string, params json.RawMessage, svc *certs.Service, resp
 		}
 		result, cerr := svc.ACMEAuto(certs.ACMEAutoRequest{
 			Enabled: p.Enabled, DaysBefore: p.DaysBefore, CA: p.CA,
-			DirectoryURL: p.DirectoryURL, Webroot: p.Webroot, Email: p.Email,
+			DirectoryURL: p.DirectoryURL, Webroot: p.Webroot, SitesRoot: p.SitesRoot, Email: p.Email,
 			KeyType: p.KeyType, EABKid: p.EABKid, EABHMACKey: p.EABHMACKey,
 			ClearEAB: p.ClearEAB, Confirm: p.Confirm,
 		})

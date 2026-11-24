@@ -2,6 +2,7 @@ package certs
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -25,6 +26,8 @@ type ACMEBuiltinStatus struct {
 	DirectoryURL   string               `json:"directory_url"`
 	Staging        bool                 `json:"staging"`
 	Webroot        string               `json:"webroot,omitempty"`
+	SitesRoot      string               `json:"sites_root,omitempty"`
+	SitesRootHint  string               `json:"sites_root_hint,omitempty"`
 	Email          string               `json:"email,omitempty"`
 	KeyType        string               `json:"key_type"`
 	EABConfigured  bool                 `json:"eab_configured"`
@@ -62,6 +65,8 @@ func (s *Service) ACMEBuiltinStatus() (*ACMEBuiltinStatus, *CertError) {
 		DirectoryURL:   dirURL,
 		Staging:        settings.CA == acmeproto.CAStaging,
 		Webroot:        settings.Webroot,
+		SitesRoot:      s.resolveSitesRoot(settings),
+		SitesRootHint:  s.issueSitesRootHint(settings),
 		Email:          settings.Email,
 		KeyType:        acmeKeyTypeOrDefault(settings.KeyType),
 		EABConfigured:  settings.EABKid != "" && settings.EABHMACKey != "",
@@ -113,6 +118,7 @@ type ACMEAutoRequest struct {
 	CA           string
 	DirectoryURL string
 	Webroot      string
+	SitesRoot    string
 	Email        string
 	KeyType      string
 	EABKid       string
@@ -126,6 +132,7 @@ type ACMEAutoResult struct {
 	CA            string       `json:"ca"`
 	DirectoryURL  string       `json:"directory_url"`
 	Webroot       string       `json:"webroot,omitempty"`
+	SitesRoot     string       `json:"sites_root,omitempty"`
 	Email         string       `json:"email,omitempty"`
 	KeyType       string       `json:"key_type"`
 	EABConfigured bool         `json:"eab_configured"`
@@ -158,6 +165,18 @@ func (s *Service) ACMEAuto(req ACMEAutoRequest) (*ACMEAutoResult, *CertError) {
 	}
 	if dir := strings.TrimSpace(req.DirectoryURL); dir != "" {
 		settings.DirectoryURL = dir
+	}
+	if sitesRoot := strings.TrimSpace(req.SitesRoot); sitesRoot != "" {
+		if !filepath.IsAbs(sitesRoot) {
+			return nil, invalidParam("sites_root 必须是绝对路径（站点根父目录）")
+		}
+		sitesRoot = filepath.Clean(sitesRoot)
+		if err := os.MkdirAll(sitesRoot, 0o755); err != nil {
+			return nil, newCertHintError(codeInternal,
+				"创建 sites_root 失败: "+err.Error(),
+				"确认该目录可写（需在安装目录内，G-31 零侵入）")
+		}
+		settings.SitesRoot = sitesRoot
 	}
 	if webroot := strings.TrimSpace(req.Webroot); webroot != "" {
 		if !filepath.IsAbs(webroot) {
@@ -236,7 +255,7 @@ func (s *Service) ACMEAuto(req ACMEAutoRequest) (*ACMEAutoResult, *CertError) {
 	})
 	out := &ACMEAutoResult{
 		CA: settings.CA, DirectoryURL: dirURL,
-		Webroot: settings.Webroot, Email: settings.Email,
+		Webroot: settings.Webroot, SitesRoot: s.resolveSitesRoot(settings), Email: settings.Email,
 		KeyType:       acmeKeyTypeOrDefault(settings.KeyType),
 		EABConfigured: settings.EABKid != "" && settings.EABHMACKey != "",
 		AutoRenew:     settings.AutoRenew, DaysBefore: settings.DaysBefore,

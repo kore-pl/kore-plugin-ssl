@@ -52,11 +52,23 @@ type renewSetParams struct {
 // acmeStatusParams 是 ssl.acme.status 的入参（无字段，保留形状校验）。
 type acmeStatusParams struct{}
 
-// acmeIssueParams 是 ssl.acme.issue 的入参：confirm 必须为 true 才联网签发。
+// acmeIssueParams 是 ssl.acme.issue 的入参。
+//
+// 一键签发（0.7.0）：只有 confirm 是必填语义，其余全部有默认值来源——
+// site 从站点页带出、webroot 从站点根约定带出、email/ca/key_type 从已存配置带出。
+// engine=external 时才走外部客户端通道（老行为）。
 type acmeIssueParams struct {
-	Domain  string `json:"domain"`
-	Email   string `json:"email"`
-	Confirm bool   `json:"confirm"`
+	Domain       string   `json:"domain"`
+	Site         string   `json:"site"`
+	AltNames     []string `json:"alt_names"`
+	Webroot      string   `json:"webroot"`
+	Email        string   `json:"email"`
+	CA           string   `json:"ca"`
+	DirectoryURL string   `json:"directory_url"`
+	KeyType      string   `json:"key_type"`
+	Engine       string   `json:"engine"`
+	Confirm      bool     `json:"confirm"`
+	SkipPrecheck bool     `json:"skip_precheck"`
 }
 
 // parseImportParams 校验 ssl.import 入参形状并反序列化。
@@ -201,6 +213,7 @@ type acmeAutoParams struct {
 	CA           string `json:"ca"`
 	DirectoryURL string `json:"directory_url"`
 	Webroot      string `json:"webroot"`
+	SitesRoot    string `json:"sites_root"`
 	Email        string `json:"email"`
 	KeyType      string `json:"key_type"`
 	EABKid       string `json:"eab_kid"`

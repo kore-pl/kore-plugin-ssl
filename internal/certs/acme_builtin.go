@@ -59,6 +59,7 @@ type acmeSettings struct {
 	CA           string `json:"ca"`
 	DirectoryURL string `json:"directory_url,omitempty"`
 	Webroot      string `json:"webroot,omitempty"`
+	SitesRoot    string `json:"sites_root,omitempty"`
 	Email        string `json:"email,omitempty"`
 	KeyType      string `json:"key_type,omitempty"`
 	EABKid       string `json:"eab_kid,omitempty"`

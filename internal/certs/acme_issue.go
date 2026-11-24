@@ -255,11 +255,17 @@ func (s *Service) ACMEBuiltinIssue(req ACMEBuiltinIssueRequest) (*ACMEBuiltinIss
 		Action: "issue", CA: session.settings.CA, Directory: session.dirURL,
 		Domain: domains[0], Result: "ok",
 	})
-	out.Hint = "证书已落盘；到站点页用 ssl.bind.set 登记归属，再用 site.bindSSL 绑定（本仓不写站点配置）"
-	if out.Staging {
-		out.Hint = "这是 Let's Encrypt staging 证书（浏览器不信任）：把 ca 换成 letsencrypt 或 litessl 再签一次即可上线"
-	}
+	out.Hint = acmeIssueNextStepHint(out.Staging)
 	return out, nil
+}
+
+// acmeIssueNextStepHint 是签发成功后的下一步文案（单点维护，一键签发复用）。
+// 站点绑定是 site 侧动作：本仓只给建议载荷，绝不代执行。
+func acmeIssueNextStepHint(staging bool) string {
+	if staging {
+		return "这是 Let's Encrypt staging 证书（浏览器不信任）：把 ca 换成 letsencrypt 或 litessl 再签一次即可上线"
+	}
+	return "证书已落盘；到站点页用 ssl.bind.set 登记归属，再用 site.bindSSL 绑定（本仓不写站点配置）"
 }
 
 // applyIssueOverrides 把本次调用的覆盖项叠加到已存设置上（不持久化）。

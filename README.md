@@ -27,7 +27,7 @@ kore 的 TLS 证书管理插件（M5 批 1 · 生产级）：证书扫描解析�
 | `ssl.expiring` | `{days?}`（窗口，缺省 30） | `{expiring:[{name, path, not_after, days_left, severity}], checked}` |
 | `ssl.renew.set` | `{name, days_before?}` | `{created:false, task_id:"", next_run_at, recommended_task, hint}`（待创建任务描述） |
 | `ssl.acme.status` | 无 | `{available, tool, version}`（只读探测本机客户端） |
-| `ssl.acme.issue` | `{domain, email, confirm:true}` | 签发结果（证书元数据 + 路径）；未确认 `E_INVALID`、无客户端 `E_UNSUPPORTED` |
+| `ssl.acme.issue` | `{site?, domain?, confirm:true, webroot?, email?, ca?, key_type?, engine?, alt_names?, skip_precheck?}` | **一键签发**：域名从 `site` 带出、webroot 从站点根约定带出、邮箱/CA/密钥类型从已存配置带出；默认内置 ACME（`engine=external` 才走 certbot/acme.sh）。结果含 `resolved{*_source}` 解释每个字段来源 |
 | `ssl.issue` | 兼容入口 | `E_UNSUPPORTED` + hint：指向 `ssl.acme.status` / `ssl.acme.issue` |
 | `ssl.bind.set` | `{cert, site, note?, probe?:{http_port,https_port}}` | 归属登记（一对一冲突校验）+ 站点侧推荐载荷 `site_bind`；显式给 `probe` 时附带只读 HTTPS 判定 |
 | `ssl.bind.remove` | `{cert?, site?}`（至少一个） | `{removed, binding, hint}`；只解除本仓登记，站点侧需 `site.unbindSSL` |
@@ -90,19 +90,44 @@ SHA-256 指纹去重。单张证书无法解析只在该条目写 `error`，不�
   不会天天重签。
 - 证书不存在直接 `E_NOTFOUND` + hint，不返回指向空证书的任务定义。
 
-## ACME（骨架，必须用户显式触发）
+## ACME（内置客户端 + 一键签发）
 
-内置 ACME 协议实现**没有做**（G-10 无联网 / G-17 依赖白名单）；方案对比与取舍见
-kore 仓库 `docs/DECISIONS/0020-acme.md`（ADR-0020）。插件只做两件事：
+两条通道，默认走内置：
 
-1. `ssl.acme.status`：探测本机 `certbot` / `acme.sh`（PATH → `/usr/bin`、`/usr/local/bin`、
-   `/snap/bin`、`~/.acme.sh`），跑 `<tool> --version` 取版本；缺工具 `available=false`，不是错误。
-2. `ssl.acme.issue`：`confirm=true` 且客户端可用时，以 argv 数组调用
+1. **内置 ACME（默认，0.5.0 起）**：`ssl.acme.builtin.issue` 用本仓 `internal/acme`
+   直接跑 RFC 8555（HTTP-01），不依赖任何外部二进制。账户密钥 / 设置 / 审计都在
+   `<证书目录>/acme/`（0600），删安装目录即清零。自动续期默认关闭，由 `ssl.acme.auto`
+   显式开启后交给内核 scheduler（G-19 不允许插件自己起 ticker）。
+2. **外部客户端（可选，`engine=external`）**：`ssl.acme.status` 探测本机
+   `certbot` / `acme.sh`，`ssl.acme.issue` 以 argv 数组调用
    `certbot certonly --standalone`（或 `acme.sh --issue --standalone`），工作目录固定
-   `<证书目录>/acme/<tool>`（0700），签出的证书经 `ssl.import` 纳入管理并写
-   `<base>.acme` 归属标记（此后 `ssl.renew` 不会把它当自签重签）。
-   未确认 `E_INVALID`、无客户端 `E_UNSUPPORTED`（均带 hint）；工具失败 `E_UPSTREAM`
-   并回传输出尾部。**私钥内容绝不进返回值**，只给路径与指纹。
+   `<证书目录>/acme/<tool>`（0700）。缺工具 `E_UNSUPPORTED` + 安装指引。
+
+### 一键申请（0.7.0）
+
+站点页只需要一个站点域名 + 一次确认：
+
+```json
+{"site": "example.com", "confirm": true}
+```
+
+字段来源按 param → 站点约定 → 已存配置 的顺序推断，结果里用
+`resolved.domain_source` / `resolved.webroot_source` / `resolved.email_source` /
+`resolved.ca_source` 逐项说明"为什么没让用户填"：
+
+| 字段 | 默认来源 |
+| --- | --- |
+| domain | `domain` → `site` → `<sites_root>` 下唯一站点（`inferred_single_site`） |
+| webroot | `webroot` → `<sites_root>/<domain>`（存在即用）→ 已存 `webroot` |
+| sites_root | `KORE_SITES_DIR` 环境变量 → `ssl.acme.auto` 的 `sites_root` → `<state>/plugin-data/site/sites`（站点插件默认布局） |
+| email | `email` → 已存配置（可为空） |
+| ca | `ca` → 已存配置（用户改过才尊重）→ `letsencrypt` |
+| key_type | `key_type` → 已存配置 → `ecdsa256` |
+
+`confirm=true` 仍是硬门（G-10：联网必须由用户显式触发），一次点击就是确认。
+**失败一律给「怎么办」**：域名解析未生效给 `dig +short A <domain>`；80 端口不通给
+防火墙/安全组与 `curl` 验证命令；限流给「先用 `letsencrypt-staging` 跑通」。
+**绝不真打生产配额做验证**：测试全部用本地 mock CA（`internal/acme/acmetest`）。
 
 ## 续期前备份
 
@@ -244,7 +269,7 @@ go vet ./...
 go test -timeout 200s ./...     # 单元 + 故障注入 + 真实 E2E（插件二进制 + UDS + TLS）
 make build
 make dist
-tar tzf dist/ssl-0.6.0.tar.gz | head -1   # 必须是 info.json
+tar tzf dist/ssl-0.7.0.tar.gz | head -1   # 必须是 info.json
 ```
 
 `make check` 聚合 gofmt / vet / test。`dist` 采用确定性打包
@@ -293,7 +318,7 @@ tar tzf dist/ssl-0.6.0.tar.gz | head -1   # 必须是 info.json
 - **行为准则**：[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。
 - **兼容性**：`protocol: kore.plugin.v1` · `requires_kore: >=0.1.0 <0.2.0` · `lifecycle: lazy` · 深度等级 `production`。
 - **验证方式**：本地 `make check` 优先（CI 只在 push main / tag / PR / 手动跑；发布前 `make dist` 连跑两次核对 sha 一致）。
-- **发布产物**：`make dist` → `dist/ssl-0.6.0.tar.gz` + `.sha256`（位级可复现，连跑两次 sha 相同）。
+- **发布产物**：`make dist` → `dist/ssl-0.7.0.tar.gz` + `.sha256`（位级可复现，连跑两次 sha 相同）。
 - **相关仓库**：[索引 kore-plugins](https://github.com/kore-pl/kore-plugins) · [协议文档](https://github.com/kore-pl/kore/blob/main/docs/PLUGIN-PROTOCOL.md) · [SDK 指南](https://github.com/kore-pl/kore/blob/main/docs/PLUGIN-SDK.md)
 
 <!-- oss:end -->

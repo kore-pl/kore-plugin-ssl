@@ -5,6 +5,52 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-11-24
+
+### Added
+
+- **`ssl.acme.issue` 一键签发（零字段路径）**：站点页只需 `{site, confirm:true}`，
+  域名 / webroot / 邮箱 / CA / 密钥类型全部按「param → 站点约定 → 已存配置」推断；
+  结果新增 `resolved{domain_source, webroot_source, email_source, ca_source, engine}`，
+  逐项说明每个字段从哪来。此前必须手填 `domain`+`email` 且**只认外部 certbot/acme.sh**
+  （本机没装就整条链路不可用），这是「站点页申请不了证书」的根因。
+  - 默认引擎改为**内置 ACME**（`internal/acme`，0.5.0 已具备），零外部依赖；
+    `engine=external` 保留原外部客户端通道，行为不变。
+  - 新增 `site`（站点域名）、`alt_names`、`webroot`、`ca`、`directory_url`、
+    `key_type`、`engine`、`skip_precheck` 入参，全部可选。
+  - **真零参数**：既不传 `site` 也不传 `domain` 时，从 `<sites_root>` 枚举站点，
+    恰好一个就采用（`domain_source=inferred_single_site`）；多个站点则拒绝猜测并列候选，
+    要求带 `site`——猜错站点会把 challenge 写进别人的站点根。
+  - webroot 推断链：显式 `webroot` → `<sites_root>/<domain>`（存在即用）→ 已存 `webroot`；
+    `sites_root` 解析链：`KORE_SITES_DIR` → `ssl.acme.auto.sites_root` →
+    `<KORE_STATE_DIR>/plugin-data/site/sites`（站点插件默认布局）。
+  - `ssl.acme.auto` 新增 `sites_root`（绝对路径，落 0600 settings.json，一次配置、后续复用）；
+    `ssl.acme.builtin.status` 暴露 `sites_root` 与 `sites_root_hint`（说明来源）。
+- **失败提示改成「怎么办」**：新增 `enrichIssueError`——域名解析类给
+  `dig +short A <domain>`，80 端口类给防火墙/安全组 + `curl -I http://<domain>/.well-known/acme-challenge/ping`，
+  限流（`E_RATELIMIT`）给「先用 `letsencrypt-staging` 跑通、不占生产配额」并在 hint 里写明
+  「同组域名每周 5 张 / 每小时 5 次」的口径。
+- 默认 CA 口径：未配置过 ACME 时一键路径用 `letsencrypt`（站点页目标是拿到浏览器信任的证书），
+  配置过则尊重 `settings.ca`；生产配额风险由签发前的本地 HTTP-01 预检兜住。
+
+### Changed
+
+- `ssl.acme.issue` 成功提示统一收敛到 `acmeIssueNextStepHint`（staging / 生产两种文案单点维护），
+  不再在两处各写一份。
+- README 的 ACME 章节同步为「内置客户端 + 一键签发」（原文仍写"内置 ACME 没有做"，与 0.5.0 代码不符）。
+
+### Tests
+
+- `internal/certs/acme_quick_test.go`（7 条）：
+  - 零字段（只给 `site` + `confirm`）用**本地 mock CA** 真实走完 HTTP-01 并落盘；
+  - 真零参数（只给 `confirm`，单站点）同样签发成功；多站点时拒绝猜测并列候选；
+  - 反例：`confirm=false` 拒绝且 **0 个网络请求**、缺站点域名给可操作提示、
+    预检不通的 hint 必含 `dig +short A` 与防火墙、限流 hint 必含 staging、
+    外部引擎无客户端时 `E_UNSUPPORTED`、默认 CA 与用户覆盖可区分。
+- 全部用 `internal/acme/acmetest` 本地 CA，**不真申请 Let's Encrypt**（不消耗配额）。
+- 既有 boundary 断言未放宽：`site.bindSSL` 只允许出现在建议载荷文件里——本轮把成功文案
+  收敛到 `acme_issue.go`（白名单内），新文件不出现该字面量。
+
 ## [0.6.0] - 2026-11-23
 
 ### Added
