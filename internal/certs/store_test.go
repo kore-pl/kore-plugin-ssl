@@ -94,9 +94,11 @@ func TestImportOverwritesExistingPEMFileName(t *testing.T) {
 }
 
 // TestDirFromEnv 校验零侵入的目录解析优先级：
-// KORE_SSL_CERT_DIR > <KORE_STATE_DIR>/ssl > 可执行文件旁 data/ssl（不再默认 /etc/kore/ssl）。
+// KORE_SSL_CERT_DIR > <KORE_INSTALL_DIR>/data/ssl > <KORE_STATE_DIR>/ssl > 可执行文件旁
+// data/ssl（不再默认 /etc/kore/ssl；安装根缺失时的 state 兜底见 certdir_whitelist_test.go）。
 func TestDirFromEnv(t *testing.T) {
 	t.Setenv(DirEnv, "")
+	t.Setenv(installDirEnv, "")
 	t.Setenv(kernelStateEnv, "")
 	exe, err := os.Executable()
 	if err != nil {

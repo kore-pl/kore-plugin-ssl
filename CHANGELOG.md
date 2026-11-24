@@ -5,6 +5,23 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-11-24
+
+### Fixed
+
+- **默认证书目录对齐安装器受控写白名单（SSL 站点全被拒的根因）**：此前默认目录是
+  `<KORE_STATE_DIR>/ssl`，而内核注入的 state 是 `<install>/data/plugins/<id>`，实际落点
+  `<install>/data/plugins/ssl/ssl`——不在安装器注入的 `KORE_FILE_WRITE_ALLOW_DIRS=
+  <install>/data/ssl/` 内，导致 site 写站点配置（证书路径校验）时被受控写**全部拒绝**。
+  现在解析顺序改为：`KORE_SSL_CERT_DIR` > **`<KORE_INSTALL_DIR>/data/ssl`**（契约位置，
+  ADR-0023 §3.4 方案 C / ADR-0052 §104，与安装器默认白名单逐字一致）>
+  `<KORE_STATE_DIR>/ssl`（仅在拿不到安装根时兜底）> 可执行文件旁 `data/ssl`。
+  - 新增 `cert_dir_source=install-dir`；`ssl.status` / `ssl.storage` 的 `cert_dir` 现在落在白名单内。
+  - 迁移：显式设过 `KORE_SSL_CERT_DIR` 的部署行为不变；旧默认目录里的证书未参与过任何
+    成功绑定（写站点配置一律被拒），如需保留可 `mv <install>/data/plugins/ssl/ssl/* <install>/data/ssl/`。
+  - 新增 `internal/certs/certdir_whitelist_test.go`：断言「安装器注入值 = 插件默认目录 =
+    site 绑定时证书路径」，并附**反例自证**（旧口径路径必须被判在白名单外）。
+
 ## [0.7.0] - 2026-11-24
 
 ### Added
