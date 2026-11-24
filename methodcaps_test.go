@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// expectedMethods 是本仓 14 个业务方法的能力分类，作为 info.json.method_capabilities
+// expectedMethods 是本仓全部业务方法（含 config 契约）的能力分类，作为 info.json.method_capabilities
 // 的验收依据（与 site / waf / db-mysql 的 methodcaps_test 同一口径）。
 //
 // 只读方法只能 system:read；其余必须 system:admin——把写方法误降为 read 会让只读
@@ -35,6 +35,9 @@ var expectedMethods = map[string]string{
 	"acme.builtin.issue": "system:admin",
 	"acme.builtin.renew": "system:admin",
 	"acme.auto":          "system:admin",
+	// 统一配置面板契约（config.get 只读、config.set 管理）。
+	"config.get": "system:read",
+	"config.set": "system:admin",
 }
 
 // configContract 是配置面板通用契约（PLUGIN-CONFIG.md）：config.get 只读、config.set 管理。

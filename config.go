@@ -25,8 +25,10 @@ type manifest struct {
 	Capabilities []string `json:"capabilities"`
 }
 
-// config 是插件运行期配置：环境变量 + 内嵌清单，不读任何配置文件。
+// config 是插件运行期配置：环境变量 + 内嵌清单 + 统一配置面板状态。
 // fault 只由 KORE_FAULT 注入（G-20 故障注入测试用），生产环境留空。
+// state 是指针：dispatch/serve 收 config 值，config.set 更新 state 后下一次
+// 请求仍能看到新值（PLUGIN-CONFIG §10：保存后下一次调用即生效）。
 type config struct {
 	socket       string
 	id           string
@@ -36,6 +38,7 @@ type config struct {
 	capabilities []string
 	fault        string
 	startedAt    time.Time
+	state        *configState
 }
 
 // loadConfig 读取 3 个协议环境变量并解析内嵌 manifest.json。
@@ -63,5 +66,10 @@ func loadConfig() (config, error) {
 	if cfg.socket == "" {
 		return config{}, fmt.Errorf("缺少环境变量 KORE_PLUGIN_SOCK")
 	}
+	state, err := initConfigState(os.Getenv("KORE_STATE_DIR"))
+	if err != nil {
+		return config{}, err
+	}
+	cfg.state = state
 	return cfg, nil
 }

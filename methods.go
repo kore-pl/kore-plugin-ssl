@@ -42,7 +42,7 @@ func dispatch(request *pluginapi.Request, cfg config, svc *certs.Service, logger
 		response.Error = notFound(request.Method)
 		return response, false
 	}
-	if perr := handleSSLVerb(verb, request.Params, svc, response); perr != nil {
+	if perr := handleSSLVerb(verb, request.Params, cfg, svc, response); perr != nil {
 		response.Error = perr
 		response.Result = nil
 	}
@@ -58,7 +58,8 @@ func businessVerb(method, id string) (string, bool) {
 		"expiring", "renew.set", "acme.status", "acme.issue",
 		"bind.set", "bind.remove", "bind.list", "https.status",
 		"acme.builtin.issue", "acme.builtin.renew", "acme.builtin.status", "acme.auto",
-		"https.enforce", "https.unenforce":
+		"https.enforce", "https.unenforce",
+		"config.get", "config.set":
 		return verb, true
 	default:
 		return "", false
@@ -71,8 +72,22 @@ type errorDetail struct {
 }
 
 // handleSSLVerb 执行 ssl 方法；业务层返回的 CertError 统一转成协议错误体。
-func handleSSLVerb(verb string, params json.RawMessage, svc *certs.Service, response *pluginapi.Response) *pluginapi.Error {
+func handleSSLVerb(verb string, params json.RawMessage, cfg config, svc *certs.Service, response *pluginapi.Response) *pluginapi.Error {
 	switch verb {
+	case "config.get":
+		result, perr := configGet(cfg, svc)
+		if perr != nil {
+			return perr
+		}
+		response.Result = result
+		return nil
+	case "config.set":
+		result, perr := configSet(params, cfg, svc)
+		if perr != nil {
+			return perr
+		}
+		response.Result = result
+		return nil
 	case "list":
 		result, perr := svc.List()
 		if perr != nil {

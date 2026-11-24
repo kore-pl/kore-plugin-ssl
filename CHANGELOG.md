@@ -5,6 +5,31 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-11-24
+
+### Added
+
+- **统一配置面板契约 `ssl.config.get` / `ssl.config.set`**：补上 PLUGIN-CONFIG §1/§2
+  后端契约，ssl 在统一配置面板里终于有自己的设置表单（此前 configsurevy 实测
+  15 仓无契约之一）。
+  - `config.get` 返回 `{schema, values, source}`：schema 显式定义证书目录、默认
+    ACME 供应商、续期提前天数、自动续期开关、webroot/站点根、邮箱、密钥类型、
+    自定义 CA 目录地址与 EAB 凭据等**本仓真实能力**字段；类型只用
+    string/int/bool/select（禁 object/any，G-24），中文 label/help/default/
+    required，select options 非空。
+  - `config.set` 按「校验 → ACME 设置原子写 → config.json 0600 原子写 → 更新
+    内存 → 返回」顺序落盘（§3），`config.json > env > default` 优先级（§4）。
+    ACME 字段同步桥接进 `<meta>/acme/settings.json`，业务下一次签发/续期读盘
+    即生效（`restart_required=false`，§5）；证书目录变更需重建 Service，如实
+    返回 `restart_required=true / applied=false` + warnings。
+  - G-30：EAB 账户 ID 与 HMAC 密钥标 `sensitive`；`config.get` 有值回 `***`、
+    无值回空串，`config.set` 收到 `***` 表示不修改，明文只存本机 0600 文件。
+  - `info.json.method_capabilities` 声明 `ssl.config.get=system:read` /
+    `ssl.config.set=system:admin`，与 methodcaps 双向断言同步。
+  - 新增 `config_contract_test.go`：覆盖 get schema §2 逐条、set 校验正反、
+    config.json 0600 落盘与重载读回、sensitive 掩码与 `***` 不覆盖、ACME 热生效、
+    cert_dir 需重启、`ssl.config.*` dispatch 命中。
+
 ## [0.7.1] - 2026-11-24
 
 ### Fixed
