@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "kore-plugin-ssl",
+    "description": "TLS-Zertifikatsverwaltungs-Plugin (Produktionsqualität): scannt und parst Zertifikate, importiert, selfsigned, bewertet Verlängerung, prüft echte TLS-Handshakes und registriert Zertifikat→Site-Zuordnung mit schreibgeschützten Bewertungen.",
+    "detail": "docs/DETAIL.de.md"
+  }
+}

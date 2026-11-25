@@ -1,5 +1,12 @@
 # Changelog
 
+## [未发布]
+
+### 新增
+- 补齐七语言（zh/en/es/fr/de/ru/pt）`DETAIL` 文档与 `locale/*.json`、README 语言切换行与 star 提示；无日语文件、无死链，JSON 校验通过。
+- 新增六语言 `SECURITY` 译文、`.github/dependabot.yml`（gomod/npm/github-actions weekly）与 `.github/CODEOWNERS`。
+- `CONTRIBUTING.md` 写明 Git Flow 分支模型（kebab-case 命名、release/hotfix 双向合流、`--no-ff`、SSH 签名 tag 约定）。
+
 All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),

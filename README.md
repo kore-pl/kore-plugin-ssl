@@ -1,5 +1,6 @@
 # kore-plugin-ssl
 
+语言：[简体中文](docs/DETAIL.md) · [English](docs/DETAIL.en.md) · [Español](docs/DETAIL.es.md) · [Français](docs/DETAIL.fr.md) · [Deutsch](docs/DETAIL.de.md) · [Русский](docs/DETAIL.ru.md) · [Português](docs/DETAIL.pt.md)
 kore 的 TLS 证书管理插件（M5 批 1 · 生产级）：证书扫描解析、导入、自签、续期判定、
 真实 TLS 握手探测，以及「证书 → 站点」归属登记与强制 HTTPS 的**只读判定**。
 
@@ -322,3 +323,7 @@ tar tzf dist/ssl-0.7.0.tar.gz | head -1   # 必须是 info.json
 - **相关仓库**：[索引 kore-plugins](https://github.com/kore-pl/kore-plugins) · [协议文档](https://github.com/kore-pl/kore/blob/main/docs/PLUGIN-PROTOCOL.md) · [SDK 指南](https://github.com/kore-pl/kore/blob/main/docs/PLUGIN-SDK.md)
 
 <!-- oss:end -->
+
+## 支持本项目
+
+如果证书插件帮你把 TLS 续期这件烦心事理顺了，欢迎给仓库点一个 ⭐ star——你的支持会让更多人看见 kore 的插件生态；想参与就从 [CONTRIBUTING.md](CONTRIBUTING.md) 开始。

@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "kore-plugin-ssl",
+    "description": "Plugin de gestión de certificados TLS (producción): escanea y analiza certificados, importa, autofirma, decide renovación, sondea handshakes TLS reales y registra la relación certificado→sitio con juicios de solo lectura.",
+    "detail": "docs/DETAIL.es.md"
+  }
+}

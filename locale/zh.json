@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "kore-plugin-ssl",
+    "description": "TLS 证书管理插件（生产级）：证书扫描解析、导入、自签、续期判定、真实 TLS 握手探测，以及「证书 → 站点」归属登记与强制 HTTPS 的只读判定。",
+    "detail": "docs/DETAIL.md"
+  }
+}

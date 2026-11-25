@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "kore-plugin-ssl",
+    "description": "TLS certificate management plugin (production grade): scans and parses certificates, imports, self-signs, judges renewal, probes real TLS handshakes, and registers certificate→site ownership with read-only enforcement judgments.",
+    "detail": "docs/DETAIL.en.md"
+  }
+}

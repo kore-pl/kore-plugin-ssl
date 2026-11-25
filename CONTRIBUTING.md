@@ -30,6 +30,23 @@
 
 `make dist` 是**位级可复现**的：条目固定、mtime / owner / group / mode 全量归一、`gzip -9n`；同一源码在任意干净 clone、任意 umask 下重打包，sha256 必须逐字相同。包内首条目是 `info.json`（安装器先读它），随后是 `bin/ssl` 与 `SHA256SUMS`。
 
+## 3.1 Git Flow 分支模型
+
+本仓采用 Git Flow：长期分支 `main`（发布）与本地 `develop`（开发集成分支）；其余为短生命周期分支，用完即删。分支名一律小写英文 + 连字符（kebab-case）。
+
+| 分支 | 从哪开 | 合回哪 | 用途 |
+| --- | --- | --- | --- |
+| `feature/*` | `develop` | `develop` | 新功能 / 新方法 |
+| `fix/*` | `develop` | `develop` | 非紧急修复 |
+| `release/*` | `develop` | **`main` + `develop` 双向** | 发布冻结，与 tag 同号，`--no-ff` 合流 |
+| `hotfix/*` | `main` | **`main` + `develop` 双向** | 已发布版本紧急修复 |
+
+`release/*` 与 `hotfix/*` 必须双向合流，避免下个版本把已修好的问题带回 `main`。不 force push、不 rebase、不改写已有 tag、不改 GitHub 默认分支、不 push 普通分支到镜像仓；回退用追加 revert 提交。
+
+### 签名约定
+
+本仓已按参考仓对齐 SSH 签名配置（`git config --local`，不入库）：`gpg.format=ssh`、`user.signingkey=/home/pt/.ssh/id_ed25519_github_docker_panel.pub`、`tag.gpgSign=true`、`gpg.ssh.allowedSignersFile=<repo>/.git/allowed_signers`。版本 tag 用 `git tag -s vX.Y.Z -m "中文说明"` 显式 SSH 签名，切勿用未签名的 `git tag -a`；用 `git tag -v vX.Y.Z` 校验，应见 `Good "git" signature`。提交按 DCO 用 `git commit -s`。
+
 ## 4. 提交与 PR
 
 - 提交信息：`type(scope): 中文描述`，type ∈ `feat` / `fix` / `perf` / `refactor` / `docs` / `test` / `chore` / `build`。
